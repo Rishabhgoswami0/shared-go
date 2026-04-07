@@ -1,9 +1,11 @@
-package database
+package context
 
 import (
 	"context"
 	"database/sql"
 	"errors"
+
+	"github.com/Rishabhgoswami0/shared-go/pkg/database/tenant"
 )
 
 // contextKey is an unexported type for context keys in this package.
@@ -20,7 +22,7 @@ var ErrNoDBInContext = errors.New("database not found in context: is the tenant 
 
 // WithTenantDB returns a new context carrying the tenant's write and read DB pools.
 // This is called by the tenant HTTP middleware after a successful pool.Get().
-func WithTenantDB(ctx context.Context, pair *TenantConnPair) context.Context {
+func WithTenantDB(ctx context.Context, pair *tenant.TenantConnPair) context.Context {
 	ctx = context.WithValue(ctx, contextKeyWriteDB, pair.Write)
 	ctx = context.WithValue(ctx, contextKeyReadDB, pair.Read)
 	return ctx
