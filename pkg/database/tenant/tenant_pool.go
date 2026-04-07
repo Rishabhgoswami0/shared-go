@@ -1,4 +1,4 @@
-package database
+package tenant
 
 import (
 	"context"
@@ -8,6 +8,9 @@ import (
 	"log"
 	"sync"
 	"time"
+
+	"github.com/Rishabhgoswami0/shared-go/pkg/crypto"
+	"github.com/Rishabhgoswami0/shared-go/pkg/database/postgres"
 )
 
 // ─── Errors ────────────────────────────────────────────────────────────────
@@ -203,11 +206,11 @@ func (p *TenantDBPool) lookupTenant(ctx context.Context, tenantID string) (*Tena
 	// ── Decrypt DSNs (AES-256-GCM) ─────────────────────────────────────────
 	// DSNs are stored encrypted in master-db. Decrypt them now, in memory only.
 	// The plaintext DSN never touches disk or logs.
-	writeDSN, err := DecryptDSN(rec.WriteDSN, p.encryptionKey)
+	writeDSN, err := crypto.DecryptDSN(rec.WriteDSN, p.encryptionKey)
 	if err != nil {
 		return nil, fmt.Errorf("tenant %q: write_dsn decryption failed (wrong key or tampered data): %w", tenantID, err)
 	}
-	readDSN, err := DecryptDSN(rec.ReadDSN, p.encryptionKey)
+	readDSN, err := crypto.DecryptDSN(rec.ReadDSN, p.encryptionKey)
 	if err != nil {
 		return nil, fmt.Errorf("tenant %q: read_dsn decryption failed (wrong key or tampered data): %w", tenantID, err)
 	}
@@ -220,7 +223,7 @@ func (p *TenantDBPool) lookupTenant(ctx context.Context, tenantID string) (*Tena
 
 // openTenantConnections opens and validates write + read connections for a tenant.
 func (p *TenantDBPool) openTenantConnections(rec *TenantRecord) (*TenantConnPair, error) {
-	writeDB, err := connectPostgres(rec.WriteDSN)
+	writeDB, err := postgres.ConnectPostgres(rec.WriteDSN)
 	if err != nil {
 		return nil, fmt.Errorf("write connection: %w", err)
 	}
@@ -228,7 +231,7 @@ func (p *TenantDBPool) openTenantConnections(rec *TenantRecord) (*TenantConnPair
 	writeDB.SetMaxIdleConns(p.cfg.MaxIdleConns)
 	writeDB.SetConnMaxLifetime(p.cfg.ConnMaxLifetime)
 
-	readDB, err := connectPostgres(rec.ReadDSN)
+	readDB, err := postgres.ConnectPostgres(rec.ReadDSN)
 	if err != nil {
 		writeDB.Close()
 		return nil, fmt.Errorf("read connection: %w", err)
