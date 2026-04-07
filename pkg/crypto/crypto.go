@@ -1,4 +1,4 @@
-package database
+package crypto
 
 import (
 	"crypto/aes"
