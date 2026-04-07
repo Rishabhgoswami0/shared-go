@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/Rishabhgoswami0/shared-go/logger"
+	"github.com/Rishabhgoswami0/shared-go/pkg/logger"
 	"go.uber.org/zap"
 )
 
