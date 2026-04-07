@@ -9,7 +9,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 )
+
+// DSNPrefix is prepended to all encrypted DSN strings to identify them.
+const DSNPrefix = "v1:"
 
 // ErrInvalidCiphertext is returned when decryption fails due to tampering or a wrong key.
 var ErrInvalidCiphertext = errors.New("invalid ciphertext: decryption failed (tampered data or wrong key)")
@@ -64,7 +68,17 @@ func EncryptDSN(plainDSN, encryptionKey string) (string, error) {
 	ciphertext := gcm.Seal(nonce, nonce, []byte(plainDSN), nil)
 
 	// Encode as base64 so it's safe to store in a TEXT column.
-	return base64.StdEncoding.EncodeToString(ciphertext), nil
+	b64 := base64.StdEncoding.EncodeToString(ciphertext)
+
+	// Prepend the version prefix so we can detect it's already encrypted
+	return DSNPrefix + b64, nil
+}
+
+// ─── IsEncrypted ─────────────────────────────────────────────────────────────
+
+// IsEncrypted returns true if the given string starts with DSNPrefix.
+func IsEncrypted(dsn string) bool {
+	return strings.HasPrefix(dsn, DSNPrefix)
 }
 
 // ─── DecryptDSN ──────────────────────────────────────────────────────────────
@@ -81,11 +95,20 @@ func DecryptDSN(encryptedDSN, encryptionKey string) (string, error) {
 	if encryptedDSN == "" {
 		return "", fmt.Errorf("DecryptDSN: encryptedDSN must not be empty")
 	}
+
+	// ─── Step 1: Validate Prefix ──────────────────────────────────────────
+	if !IsEncrypted(encryptedDSN) {
+		return "", fmt.Errorf("DecryptDSN: text is not a valid encrypted DSN (missing prefix %q)", DSNPrefix)
+	}
+
+	// Strip the prefix before decoding base64
+	cleanB64 := strings.TrimPrefix(encryptedDSN, DSNPrefix)
+
 	if encryptionKey == "" {
 		return "", fmt.Errorf("DecryptDSN: encryptionKey must not be empty")
 	}
 
-	data, err := base64.StdEncoding.DecodeString(encryptedDSN)
+	data, err := base64.StdEncoding.DecodeString(cleanB64)
 	if err != nil {
 		return "", fmt.Errorf("DecryptDSN: base64 decode failed: %w", err)
 	}
