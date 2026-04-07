@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/Rishabhgoswami0/shared-go/auth"
+	"github.com/Rishabhgoswami0/shared-go/pkg/auth"
 )
 
 // ContextKey is a custom type for context keys to avoid collisions.
