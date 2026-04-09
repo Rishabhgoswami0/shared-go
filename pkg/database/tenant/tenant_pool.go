@@ -23,15 +23,26 @@ var (
 	ErrTenantInactive = errors.New("tenant is inactive")
 )
 
-// ─── TenantRecord ──────────────────────────────────────────────────────────
+// TenantDBConfig isolates credentials and network details for a database
+type TenantDBConfig struct {
+	Host     string
+	Port     string
+	Name     string
+	User     string
+	Password string // Extracted from DB, decrypted in memory
+}
 
-// TenantRecord mirrors one row from the master-db `tenants` table.
+// TenantRecord mirrors a tenant's connection configuration.
 type TenantRecord struct {
 	TenantID string
+	WriteDB  TenantDBConfig
+	ReadDB   TenantDBConfig
+	Region   string
+	Status   string
+	
+	// Dynamically generated after decryption
 	WriteDSN string
 	ReadDSN  string
-	Region   string
-	Status   string // "active" | "suspended" | "deleted"
 }
 
 // ─── TenantConnPair ────────────────────────────────────────────────────────
@@ -184,7 +195,11 @@ func (p *TenantDBPool) Close() {
 // and decrypts the DSNs using AES-256-GCM before returning.
 func (p *TenantDBPool) lookupTenant(ctx context.Context, tenantID string) (*TenantRecord, error) {
 	const q = `
-		SELECT tenant_id, write_dsn, read_dsn, region, status
+		SELECT 
+			tenant_id, 
+			db_write_host, db_write_port, db_write_name, db_write_user, db_write_password,
+			db_read_host, db_read_port, db_read_name, db_read_user, db_read_password,
+			region, status
 		FROM tenants
 		WHERE tenant_id = $1
 		LIMIT 1
@@ -192,7 +207,12 @@ func (p *TenantDBPool) lookupTenant(ctx context.Context, tenantID string) (*Tena
 	row := p.masterRead.QueryRowContext(ctx, q, tenantID)
 
 	var rec TenantRecord
-	if err := row.Scan(&rec.TenantID, &rec.WriteDSN, &rec.ReadDSN, &rec.Region, &rec.Status); err != nil {
+	if err := row.Scan(
+		&rec.TenantID, 
+		&rec.WriteDB.Host, &rec.WriteDB.Port, &rec.WriteDB.Name, &rec.WriteDB.User, &rec.WriteDB.Password,
+		&rec.ReadDB.Host, &rec.ReadDB.Port, &rec.ReadDB.Name, &rec.ReadDB.User, &rec.ReadDB.Password,
+		&rec.Region, &rec.Status,
+	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrTenantNotFound
 		}
@@ -203,20 +223,26 @@ func (p *TenantDBPool) lookupTenant(ctx context.Context, tenantID string) (*Tena
 		return nil, fmt.Errorf("%w: tenant_id=%s status=%s", ErrTenantInactive, tenantID, rec.Status)
 	}
 
-	// ── Decrypt DSNs (AES-256-GCM) ─────────────────────────────────────────
-	// DSNs are stored encrypted in master-db. Decrypt them now, in memory only.
-	// The plaintext DSN never touches disk or logs.
-	writeDSN, err := crypto.DecryptDSN(rec.WriteDSN, p.encryptionKey)
+	// ── Decrypt Passwords (AES-256-GCM) ────────────────────────────────────
+	// Passwords are stored encrypted in master-db. Decrypt them now, in memory only.
+	decWritePass, err := crypto.DecryptDSN(rec.WriteDB.Password, p.encryptionKey)
 	if err != nil {
-		return nil, fmt.Errorf("tenant %q: write_dsn decryption failed (wrong key or tampered data): %w", tenantID, err)
+		return nil, fmt.Errorf("tenant %q: db_write_password decryption failed (wrong key or tampered data): %w", tenantID, err)
 	}
-	readDSN, err := crypto.DecryptDSN(rec.ReadDSN, p.encryptionKey)
+	decReadPass, err := crypto.DecryptDSN(rec.ReadDB.Password, p.encryptionKey)
 	if err != nil {
-		return nil, fmt.Errorf("tenant %q: read_dsn decryption failed (wrong key or tampered data): %w", tenantID, err)
+		return nil, fmt.Errorf("tenant %q: db_read_password decryption failed (wrong key or tampered data): %w", tenantID, err)
 	}
 
-	rec.WriteDSN = writeDSN
-	rec.ReadDSN = readDSN
+	rec.WriteDB.Password = decWritePass
+	rec.ReadDB.Password = decReadPass
+
+	// Re-construct the full DSN strings dynamically for database/sql usage
+	rec.WriteDSN = fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=disable",
+		rec.WriteDB.User, rec.WriteDB.Password, rec.WriteDB.Host, rec.WriteDB.Port, rec.WriteDB.Name)
+	
+	rec.ReadDSN = fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=disable",
+		rec.ReadDB.User, rec.ReadDB.Password, rec.ReadDB.Host, rec.ReadDB.Port, rec.ReadDB.Name)
 
 	return &rec, nil
 }
