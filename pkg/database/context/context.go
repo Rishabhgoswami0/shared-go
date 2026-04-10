@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"log"
 
 	"github.com/Rishabhgoswami0/shared-go/pkg/database/tenant"
 )
@@ -23,6 +24,7 @@ var ErrNoDBInContext = errors.New("database not found in context: is the tenant 
 // WithTenantDB returns a new context carrying the tenant's write and read DB pools.
 // This is called by the tenant HTTP middleware after a successful pool.Get().
 func WithTenantDB(ctx context.Context, pair *tenant.TenantConnPair) context.Context {
+	log.Println("STEP 4: DB injected into context")
 	ctx = context.WithValue(ctx, contextKeyWriteDB, pair.Write)
 	ctx = context.WithValue(ctx, contextKeyReadDB, pair.Read)
 	return ctx

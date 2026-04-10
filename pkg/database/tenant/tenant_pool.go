@@ -39,7 +39,7 @@ type TenantRecord struct {
 	ReadDB   TenantDBConfig
 	Region   string
 	Status   string
-	
+
 	// Dynamically generated after decryption
 	WriteDSN string
 	ReadDSN  string
@@ -124,9 +124,11 @@ func NewTenantDBPool(masterRead *sql.DB, cfg PoolConfig, encryptionKey string) *
 //   - Returns ErrTenantNotFound if no row exists in master-db.
 //   - Returns ErrTenantInactive if the tenant is suspended/deleted.
 func (p *TenantDBPool) Get(ctx context.Context, tenantID string) (*TenantConnPair, error) {
+	log.Println("STEP 3: TenantDBPool GET called for tenant:", tenantID)
 	// ── Fast path: already cached ──────────────────────────────────────────
 	p.mu.RLock()
 	if pair, ok := p.pools[tenantID]; ok {
+		log.Println("STEP 3A: Cache HIT for tenant:", tenantID)
 		pair.lastUsed = time.Now() // safe: time.Time assignment is atomic on 64-bit
 		p.mu.RUnlock()
 		return pair, nil
@@ -134,6 +136,7 @@ func (p *TenantDBPool) Get(ctx context.Context, tenantID string) (*TenantConnPai
 	p.mu.RUnlock()
 
 	// ── Slow path: load from master-db ─────────────────────────────────────
+	log.Println("STEP 3B: Cache MISS → fetching from master DB:", tenantID)
 	record, err := p.lookupTenant(ctx, tenantID)
 	if err != nil {
 		return nil, err
@@ -155,6 +158,7 @@ func (p *TenantDBPool) Get(ctx context.Context, tenantID string) (*TenantConnPai
 		return existing, nil
 	}
 	p.pools[tenantID] = pair
+	log.Println("STEP 3H: Tenant cached:", tenantID)
 	p.mu.Unlock()
 
 	log.Printf("[TenantDBPool] loaded tenant %q (region=%s)", tenantID, record.Region)
@@ -194,6 +198,7 @@ func (p *TenantDBPool) Close() {
 // lookupTenant queries the master-db read replica for the tenant's routing record
 // and decrypts the DSNs using AES-256-GCM before returning.
 func (p *TenantDBPool) lookupTenant(ctx context.Context, tenantID string) (*TenantRecord, error) {
+	log.Println("STEP 3C: Querying MasterDB for tenant:", tenantID)
 	const q = `
 		SELECT 
 			tenant_id, 
@@ -208,7 +213,7 @@ func (p *TenantDBPool) lookupTenant(ctx context.Context, tenantID string) (*Tena
 
 	var rec TenantRecord
 	if err := row.Scan(
-		&rec.TenantID, 
+		&rec.TenantID,
 		&rec.WriteDB.Host, &rec.WriteDB.Port, &rec.WriteDB.Name, &rec.WriteDB.User, &rec.WriteDB.Password,
 		&rec.ReadDB.Host, &rec.ReadDB.Port, &rec.ReadDB.Name, &rec.ReadDB.User, &rec.ReadDB.Password,
 		&rec.Region, &rec.Status,
@@ -222,7 +227,7 @@ func (p *TenantDBPool) lookupTenant(ctx context.Context, tenantID string) (*Tena
 	if rec.Status != "active" {
 		return nil, fmt.Errorf("%w: tenant_id=%s status=%s", ErrTenantInactive, tenantID, rec.Status)
 	}
-
+	log.Println("STEP 3D: Tenant found and active:", tenantID)
 	// ── Decrypt Passwords (AES-256-GCM) ────────────────────────────────────
 	// Passwords are stored encrypted in master-db. Decrypt them now, in memory only.
 	decWritePass, err := crypto.DecryptDSN(rec.WriteDB.Password, p.encryptionKey)
@@ -236,11 +241,11 @@ func (p *TenantDBPool) lookupTenant(ctx context.Context, tenantID string) (*Tena
 
 	rec.WriteDB.Password = decWritePass
 	rec.ReadDB.Password = decReadPass
-
+	log.Println("STEP 3E: Password decrypted successfully for tenant:", tenantID)
 	// Re-construct the full DSN strings dynamically for database/sql usage
 	rec.WriteDSN = fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=disable",
 		rec.WriteDB.User, rec.WriteDB.Password, rec.WriteDB.Host, rec.WriteDB.Port, rec.WriteDB.Name)
-	
+
 	rec.ReadDSN = fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=disable",
 		rec.ReadDB.User, rec.ReadDB.Password, rec.ReadDB.Host, rec.ReadDB.Port, rec.ReadDB.Name)
 
@@ -249,6 +254,9 @@ func (p *TenantDBPool) lookupTenant(ctx context.Context, tenantID string) (*Tena
 
 // openTenantConnections opens and validates write + read connections for a tenant.
 func (p *TenantDBPool) openTenantConnections(rec *TenantRecord) (*TenantConnPair, error) {
+	log.Println("STEP 3F: Opening DB connections")
+	log.Println("WRITE DB:", rec.WriteDB.Host, rec.WriteDB.Port)
+	log.Println("READ DB:", rec.ReadDB.Host, rec.ReadDB.Port)
 	writeDB, err := postgres.ConnectPostgres(rec.WriteDSN)
 	if err != nil {
 		return nil, fmt.Errorf("write connection: %w", err)
@@ -265,7 +273,7 @@ func (p *TenantDBPool) openTenantConnections(rec *TenantRecord) (*TenantConnPair
 	readDB.SetMaxOpenConns(p.cfg.MaxOpenConns)
 	readDB.SetMaxIdleConns(p.cfg.MaxIdleConns)
 	readDB.SetConnMaxLifetime(p.cfg.ConnMaxLifetime)
-
+	log.Println("STEP 3G: DB connections established successfully")
 	return &TenantConnPair{
 		Write:    writeDB,
 		Read:     readDB,
