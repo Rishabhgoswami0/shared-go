@@ -64,3 +64,15 @@ func InitGlobal(env string) error {
 	Log = l
 	return nil
 }
+
+func ensureLog() {
+	if Log == nil {
+		_ = InitGlobal("dev")
+	}
+}
+
+func Debug(msg string, fields ...zap.Field) { ensureLog(); Log.Debug(msg, fields...) }
+func Info(msg string, fields ...zap.Field)  { ensureLog(); Log.Info(msg, fields...) }
+func Warn(msg string, fields ...zap.Field)  { ensureLog(); Log.Warn(msg, fields...) }
+func Error(msg string, fields ...zap.Field) { ensureLog(); Log.Error(msg, fields...) }
+func Fatal(msg string, fields ...zap.Field) { ensureLog(); Log.Fatal(msg, fields...) }
