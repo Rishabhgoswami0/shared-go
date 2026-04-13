@@ -55,3 +55,11 @@ func NewInternal(code, message string, raw error) *AppError {
 func NewForbidden(code, message string, raw error) *AppError {
 	return NewAppError(http.StatusForbidden, code, message, raw)
 }
+
+func NewServiceUnavailable(code, message string, raw error) *AppError {
+	return NewAppError(http.StatusServiceUnavailable, code, message, raw)
+}
+
+func NewDBError(message string, raw error) *AppError {
+	return NewAppError(http.StatusServiceUnavailable, "DATABASE_ERROR", message, raw)
+}
