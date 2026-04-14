@@ -63,6 +63,10 @@ type PoolConfig struct {
 	ConnMaxLifetime time.Duration
 	// IdleTTL is how long a tenant pool can sit unused before being evicted.
 	IdleTTL time.Duration
+	// EnableReadReplica determines whether a separate Read connection is opened per tenant.
+	// When false (dev default), Read points to the same pool as Write (no replica needed).
+	// [PRODUCTION] Set to true once read replicas are provisioned per tenant.
+	EnableReadReplica bool
 }
 
 // DefaultPoolConfig returns sensible production defaults.
@@ -72,6 +76,7 @@ func DefaultPoolConfig() PoolConfig {
 		MaxIdleConns:    20,
 		ConnMaxLifetime: 5 * time.Minute,
 		IdleTTL:         30 * time.Minute,
+		EnableReadReplica: false,
 	}
 }
 
@@ -253,10 +258,12 @@ func (p *TenantDBPool) lookupTenant(ctx context.Context, tenantID string) (*Tena
 }
 
 // openTenantConnections opens and validates write + read connections for a tenant.
+// When EnableReadReplica is false, the Read handle re-uses the Write pool to avoid
+// needing a read replica in development or single-node environments.
 func (p *TenantDBPool) openTenantConnections(rec *TenantRecord) (*TenantConnPair, error) {
 	log.Println("STEP 3F: Opening DB connections")
 	log.Println("WRITE DB:", rec.WriteDB.Host, rec.WriteDB.Port)
-	log.Println("READ DB:", rec.ReadDB.Host, rec.ReadDB.Port)
+
 	writeDB, err := postgres.ConnectPostgres(rec.WriteDSN)
 	if err != nil {
 		return nil, fmt.Errorf("write connection: %w", err)
@@ -265,14 +272,24 @@ func (p *TenantDBPool) openTenantConnections(rec *TenantRecord) (*TenantConnPair
 	writeDB.SetMaxIdleConns(p.cfg.MaxIdleConns)
 	writeDB.SetConnMaxLifetime(p.cfg.ConnMaxLifetime)
 
-	readDB, err := postgres.ConnectPostgres(rec.ReadDSN)
-	if err != nil {
-		writeDB.Close()
-		return nil, fmt.Errorf("read connection: %w", err)
+	var readDB *sql.DB
+	if p.cfg.EnableReadReplica {
+		// [PRODUCTION]: Opens a separate connection to the read replica.
+		log.Println("READ DB (replica):", rec.ReadDB.Host, rec.ReadDB.Port)
+		readDB, err = postgres.ConnectPostgres(rec.ReadDSN)
+		if err != nil {
+			writeDB.Close()
+			return nil, fmt.Errorf("read connection: %w", err)
+		}
+		readDB.SetMaxOpenConns(p.cfg.MaxOpenConns)
+		readDB.SetMaxIdleConns(p.cfg.MaxIdleConns)
+		readDB.SetConnMaxLifetime(p.cfg.ConnMaxLifetime)
+	} else {
+		// Dev default: Read re-uses the Write pool. No replica needed.
+		log.Println("READ DB: using Write pool (EnableReadReplica=false)")
+		readDB = writeDB
 	}
-	readDB.SetMaxOpenConns(p.cfg.MaxOpenConns)
-	readDB.SetMaxIdleConns(p.cfg.MaxIdleConns)
-	readDB.SetConnMaxLifetime(p.cfg.ConnMaxLifetime)
+
 	log.Println("STEP 3G: DB connections established successfully")
 	return &TenantConnPair{
 		Write:    writeDB,
