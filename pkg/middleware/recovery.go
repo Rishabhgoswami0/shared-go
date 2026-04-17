@@ -1,26 +1,35 @@
 package middleware
 
 import (
-	"encoding/json"
 	"net/http"
+	"runtime/debug"
 
+	apperrors "github.com/Rishabhgoswami0/shared-go/pkg/errors"
 	"github.com/Rishabhgoswami0/shared-go/pkg/logger"
 	"go.uber.org/zap"
 )
 
-// PanicRecovery is an HTTP middleware function that catches panics and prevents server crashes.
+// PanicRecovery catches any panic in downstream handlers, logs the full stack
+// trace, and returns an RFC 7807 Internal Server Error response via WriteError.
+// It must be the outermost middleware so it wraps all other handlers.
 func PanicRecovery(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
-			if err := recover(); err != nil {
-				// Log the error using the new logger.Error function
-				logger.Error("Panic recovered in HTTP handler", zap.Any("error", err))
+			if rec := recover(); rec != nil {
+				stack := debug.Stack()
 
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusInternalServerError)
-				json.NewEncoder(w).Encode(map[string]string{
-					"error": "Internal Server Error",
-				})
+				logger.Error("panic recovered",
+					zap.Any("panic", rec),
+					zap.String("method", r.Method),
+					zap.String("path", r.URL.Path),
+					zap.String("stack", string(stack)),
+				)
+
+				// Use WriteError so the panic response is also RFC 7807 compliant
+				// and carries the request_id.
+				apperrors.WriteError(w, r,
+					apperrors.NewInternal("PANIC", "an unexpected error occurred", nil),
+				)
 			}
 		}()
 
