@@ -28,7 +28,7 @@ func PanicRecovery(next http.Handler) http.Handler {
 				// Use WriteError so the panic response is also RFC 7807 compliant
 				// and carries the request_id.
 				apperrors.WriteError(w, r,
-					apperrors.NewInternal("PANIC", "an unexpected error occurred", nil),
+					apperrors.NewInternalError(apperrors.CodeInternal, "an unexpected error occurred", nil),
 				)
 			}
 		}()
