@@ -10,7 +10,7 @@ import (
 	apperrors "github.com/Rishabhgoswami0/shared-go/pkg/errors"
 )
 
-// Validate is the shared validator instance. Use this across all services.
+// Validate is the shared validator instance.
 var Validate *playgroundvalidator.Validate
 
 func Init() {
@@ -30,15 +30,7 @@ func init() {
 	Init()
 }
 
-// ValidateStruct validates any struct and returns a ready-to-use *AppError
-// with RFC 7807 invalid_params populated, or nil if validation passes.
-//
-// Usage in a handler:
-//
-//	if appErr := sharedvalidator.ValidateStruct(req); appErr != nil {
-//	    apperrors.WriteError(w, r, appErr)
-//	    return
-//	}
+// ValidateStruct validates any struct and returns a ready-to-use *AppError.
 func ValidateStruct(s any) *apperrors.AppError {
 	err := Validate.Struct(s)
 	if err == nil {
@@ -46,21 +38,27 @@ func ValidateStruct(s any) *apperrors.AppError {
 	}
 
 	params := toInvalidParams(err)
-	return apperrors.NewValidationError("VALIDATION_FAILED", "request validation failed", params)
+	return apperrors.NewValidationError("request validation failed", params)
 }
 
 // toInvalidParams converts go-playground ValidationErrors to []apperrors.InvalidParam.
 func toInvalidParams(err error) []apperrors.InvalidParam {
 	ve, ok := err.(playgroundvalidator.ValidationErrors)
 	if !ok {
-		// Non-ValidationError — surface as a single generic param.
 		return []apperrors.InvalidParam{{Name: "request", Reason: err.Error()}}
 	}
 
 	params := make([]apperrors.InvalidParam, 0, len(ve))
 	for _, fe := range ve {
+		// Strip the root struct name from the namespace.
+		// e.g. "CreateTenantRequest.address.street" -> "address.street"
+		name := fe.Namespace()
+		if idx := strings.Index(name, "."); idx != -1 {
+			name = name[idx+1:]
+		}
+
 		params = append(params, apperrors.InvalidParam{
-			Name:   fe.Field(),
+			Name:   name,
 			Reason: msgForTag(fe),
 		})
 	}
