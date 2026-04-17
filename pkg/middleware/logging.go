@@ -17,12 +17,16 @@ func Logging(l logger.Logger) func(http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			start := time.Now()
 
+			// Inject start time into context for downstream observability (e.g. WriteError)
+			ctx := sharedctx.WithStartTime(r.Context(), start)
+			r = r.WithContext(ctx)
+
 			// Wrap the ResponseWriter to capture the status code written downstream.
 			rw := &responseWriter{ResponseWriter: w, status: http.StatusOK}
 
 			next.ServeHTTP(rw, r)
 
-			requestID := sharedctx.GetRequestID(r.Context())
+			requestID := sharedctx.GetRequestID(ctx)
 
 			l.Info("request handled",
 				zap.String("request_id", requestID),
