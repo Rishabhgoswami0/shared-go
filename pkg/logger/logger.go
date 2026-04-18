@@ -2,6 +2,10 @@
 package logger
 
 import (
+	"context"
+	"os"
+
+	sharedctx "github.com/Rishabhgoswami0/shared-go/pkg/context"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
@@ -20,20 +24,32 @@ type zapLogger struct {
 	internal *zap.Logger
 }
 
-func NewZapLogger(env string) (Logger, error) {
+func NewZapLogger(env string, meta ...zap.Field) (Logger, error) {
 	var config zap.Config
 	if env == "prod" {
 		config = zap.NewProductionConfig()
+		// Production sampling: 100 logs initial, then 100 thereafter
+		config.Sampling = &zap.SamplingConfig{
+			Initial:    100,
+			Thereafter: 100,
+		}
 	} else {
 		config = zap.NewDevelopmentConfig()
 		config.EncoderConfig.EncodeLevel = zapcore.CapitalColorLevelEncoder
 	}
 
+	// Standardize on ISO8601 for logs (required for ELK/Loki)
+	config.EncoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
 	config.OutputPaths = []string{"stdout"}
 
 	l, err := config.Build(zap.AddCallerSkip(1))
 	if err != nil {
 		return nil, err
+	}
+
+	// Inject service metadata if provided
+	if len(meta) > 0 {
+		l = l.With(meta...)
 	}
 
 	return &zapLogger{internal: l}, nil
@@ -53,11 +69,44 @@ func (z *zapLogger) Sync() error {
 	return z.internal.Sync()
 }
 
+// FromContext extracts request metadata (ID, Trace, Tenant) and returns a fail-safe logger.
+func FromContext(ctx context.Context) Logger {
+	l := Log
+	if l == nil {
+		ensureLog()
+		l = Log
+	}
+
+	if ctx == nil {
+		return l
+	}
+
+	var fields []zap.Field
+	if v := sharedctx.GetRequestID(ctx); v != "" {
+		fields = append(fields, zap.String("request_id", v))
+	} else {
+		// Middleware Order Warning
+		l.Warn("missing request_id in context - check middleware order")
+	}
+
+	if v := sharedctx.GetTraceID(ctx); v != "" {
+		fields = append(fields, zap.String("trace_id", v))
+	}
+	if v := sharedctx.GetTenantID(ctx); v != "" {
+		fields = append(fields, zap.String("tenant_id", v))
+	}
+
+	if len(fields) > 0 {
+		return l.With(fields...)
+	}
+	return l
+}
+
 // Global logger for simple usage if needed
 var Log Logger
 
-func InitGlobal(env string) error {
-	l, err := NewZapLogger(env)
+func InitGlobal(env string, meta ...zap.Field) error {
+	l, err := NewZapLogger(env, meta...)
 	if err != nil {
 		return err
 	}
@@ -67,7 +116,11 @@ func InitGlobal(env string) error {
 
 func ensureLog() {
 	if Log == nil {
-		_ = InitGlobal("dev")
+		env := os.Getenv("APP_ENV")
+		if env == "" {
+			env = "dev"
+		}
+		_ = InitGlobal(env)
 	}
 }
 
