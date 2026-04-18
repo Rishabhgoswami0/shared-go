@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"runtime/debug"
 	"strings"
 	"time"
 
@@ -16,56 +15,58 @@ import (
 // WriteError is the single, canonical function for writing error responses.
 func WriteError(w http.ResponseWriter, r *http.Request, err error) {
 	ctx := r.Context()
-	requestID := sharedctx.GetRequestID(ctx)
-	traceID := sharedctx.GetTraceID(ctx)
-	tenantID := sharedctx.GetTenantID(ctx)
-	startTime := sharedctx.GetStartTime(ctx)
-
+	
 	// Classify error to AppError
 	appErr := FromError(err)
 
-	// Inject observability fields into the response object
-	appErr.RequestID = requestID
-	appErr.TraceID = traceID
+	// Inject context metadata into the response object if missing
+	if appErr.RequestID == "" {
+		appErr.RequestID = sharedctx.GetRequestID(ctx)
+	}
+	if appErr.TraceID == "" {
+		appErr.TraceID = sharedctx.GetTraceID(ctx)
+	}
 
-	if requestID != "" {
+	if appErr.RequestID != "" && appErr.Instance == "" {
 		// Professional instance URI: lowercase k-case for the error code
 		// e.g. /errors/bad-request/uuid-123
 		codePart := strings.ReplaceAll(strings.ToLower(string(appErr.Code)), "_", "-")
-		appErr.Instance = fmt.Sprintf("/errors/%s/%s", codePart, requestID)
+		appErr.Instance = fmt.Sprintf("/errors/%s/%s", codePart, appErr.RequestID)
 	}
 
 	// ── Structured Logging ────────────────────────────────────────────────
+	startTime := sharedctx.GetStartTime(ctx)
 	duration := time.Duration(0)
 	if !startTime.IsZero() {
 		duration = time.Since(startTime)
 	}
 
+	// Use context-aware logger (pre-filled with request_id, trace_id, tenant_id)
+	ctxLogger := logger.FromContext(ctx)
+
 	baseFields := []zap.Field{
-		zap.String("request_id", requestID),
-		zap.String("trace_id", traceID),
-		zap.String("tenant_id", tenantID),
 		zap.String("method", r.Method),
 		zap.String("path", r.URL.Path),
-		zap.String("code", string(appErr.Code)),
+		zap.String("error_code", string(appErr.Code)), // Standardized as requested
 		zap.String("type", appErr.Type),
 		zap.Int("status", appErr.Status),
 		zap.String("detail", appErr.Detail),
 		zap.Duration("duration", duration),
+		zap.Int64("duration_ms", duration.Milliseconds()),
 	}
 
 	if appErr.Status >= 500 {
 		errFields := append(baseFields,
 			zap.Error(appErr.Raw),
-			zap.String("stack_trace", string(debug.Stack())),
+			zap.Stack("stacktrace"), // Capture full stack for internal failures
 		)
-		logger.Error("request failed", errFields...)
+		ctxLogger.Error("request failed with internal error", errFields...)
 	} else {
 		// Log 499 (Client Closed Request) specially if mapping was opted in
 		if appErr.Code == CodeClientClosed {
-			logger.Warn("client aborted request", baseFields...)
+			ctxLogger.Warn("client aborted request", baseFields...)
 		} else {
-			logger.Warn("request failed", baseFields...)
+			ctxLogger.Warn("request failed with client error", baseFields...)
 		}
 	}
 
@@ -82,10 +83,7 @@ func WriteError(w http.ResponseWriter, r *http.Request, err error) {
 	w.WriteHeader(appErr.Status)
 
 	if encErr := json.NewEncoder(w).Encode(appErr); encErr != nil {
-		logger.Error("failed to encode error response",
-			zap.String("request_id", requestID),
-			zap.Error(encErr),
-		)
+		ctxLogger.Error("failed to encode error response", zap.Error(encErr))
 	}
 }
 
