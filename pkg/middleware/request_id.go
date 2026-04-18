@@ -9,7 +9,7 @@ import (
 )
 
 const (
-	RequestIDHeader = "X-Request-ID"
+	RequestIDHeader   = "X-Request-ID"
 	TraceParentHeader = "traceparent"
 )
 
@@ -29,7 +29,7 @@ func RequestID(next http.Handler) http.Handler {
 		ctx := r.Context()
 		ctx = context.WithRequestID(ctx, requestID)
 		ctx = context.WithTraceID(ctx, traceID)
-		
+
 		// Set in response header for traceability
 		w.Header().Set(RequestIDHeader, requestID)
 
@@ -50,7 +50,7 @@ func getTraceID(r *http.Request) string {
 		}
 	}
 
-	// Fallback: generate a new 32-character hex string (16 bytes)
-	// For simplicity, we'll use a UUID without hyphens, which is 32 chars.
+	// Always guarantee a trace_id exists. 
+	// Fallback: generate a 32-character hex string (16 bytes).
 	return strings.ReplaceAll(uuid.New().String(), "-", "")
 }
