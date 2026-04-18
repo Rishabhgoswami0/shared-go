@@ -22,6 +22,10 @@ func mapErrorType(code string) string {
 		return "conflict"
 	case string(CodeTimeout):
 		return "timeout"
+	case string(CodeForbidden):
+		return "forbidden"
+	case string(CodeUnauthorized):
+		return "unauthorized"
 	default:
 		return "internal_error"
 	}
@@ -66,6 +70,7 @@ func WriteError(w http.ResponseWriter, r *http.Request, err error) {
 		zap.String("error_type", mapErrorType(string(appErr.Code))),
 		zap.Int("status", appErr.Status),
 		zap.String("detail", appErr.Detail),
+		zap.String("client_ip", sharedctx.GetClientIP(ctx)),
 		zap.Duration("duration", duration),
 		zap.Int64("duration_ms", duration.Milliseconds()),
 	}

@@ -76,6 +76,7 @@ func IPWhitelistMiddleware(allowedIPs map[string]struct{}, trustProxy bool) func
 				// Inject strongly typed context variables before logging/response
 				ctx = sharedctx.WithRequestID(ctx, reqID)
 				ctx = sharedctx.WithTraceID(ctx, traceID)
+				ctx = sharedctx.WithClientIP(ctx, ip)
 
 				// Update request with new context
 				r = r.WithContext(ctx)
