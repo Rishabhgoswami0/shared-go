@@ -37,9 +37,9 @@ func normalizeIP(ip string) string {
 	return parsed.String()
 }
 
-// getClientIP extracts the client IP and its source.
+// GetClientIP extracts the client IP and its source.
 // Uses normalizeIP to ensure consistent format against the map logic.
-func getClientIP(r *http.Request, trustProxy bool) (string, string) {
+func GetClientIP(r *http.Request, trustProxy bool) (string, string) {
 	if trustProxy {
 		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
 			parts := strings.Split(xff, ",")
@@ -64,7 +64,7 @@ func IPWhitelistMiddleware(allowedIPs map[string]struct{}, trustProxy bool) func
 				return
 			}
 
-			ip, source := getClientIP(r, trustProxy)
+			ip, source := GetClientIP(r, trustProxy)
 
 			if _, allowed := allowedIPs[ip]; ip == "" || !allowed {
 				ctx := r.Context()
