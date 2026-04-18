@@ -12,6 +12,21 @@ import (
 	"go.uber.org/zap"
 )
 
+func mapErrorType(code string) string {
+	switch code {
+	case string(CodeValidationFailed):
+		return "validation_error"
+	case string(CodeNotFound):
+		return "not_found"
+	case string(CodeConflict):
+		return "conflict"
+	case string(CodeTimeout):
+		return "timeout"
+	default:
+		return "internal_error"
+	}
+}
+
 // WriteError is the single, canonical function for writing error responses.
 func WriteError(w http.ResponseWriter, r *http.Request, err error) {
 	ctx := r.Context()
@@ -47,8 +62,8 @@ func WriteError(w http.ResponseWriter, r *http.Request, err error) {
 	baseFields := []zap.Field{
 		zap.String("method", r.Method),
 		zap.String("path", r.URL.Path),
-		zap.String("error_code", string(appErr.Code)), // Standardized as requested
-		zap.String("type", appErr.Type),
+		zap.String("error_code", string(appErr.Code)),
+		zap.String("error_type", mapErrorType(string(appErr.Code))),
 		zap.Int("status", appErr.Status),
 		zap.String("detail", appErr.Detail),
 		zap.Duration("duration", duration),

@@ -29,20 +29,40 @@ func Logging(l logger.Logger) func(http.Handler) http.Handler {
 			next.ServeHTTP(rw, r)
 
 			duration := time.Since(start)
-			
+
+			// Safe request size
+			requestSize := r.ContentLength
+			if requestSize < 0 {
+				requestSize = 0
+			}
+
 			// Use context-aware logger (pre-filled with request_id, trace_id, tenant_id)
 			ctxLogger := logger.FromContext(r.Context())
+
+			// Add middleware order guard
+			if r.Context().Value(sharedctx.RequestIDKey) == nil {
+				ctxLogger.Warn("missing request_id (middleware order issue)")
+			}
 
 			// Standard fields for every request summary
 			fields := []zap.Field{
 				zap.String("method", r.Method),
 				zap.String("path", r.URL.Path),
+				zap.String("route", r.Pattern), // Normalized route pattern (Go 1.22+)
 				zap.Int("status", rw.status),
-				zap.Duration("duration", duration),
 				zap.Int64("duration_ms", duration.Milliseconds()),
+				zap.Int64("request_size", requestSize),
 				zap.Int("response_size", rw.size),
-				zap.String("user_agent", r.UserAgent()),
-				zap.String("remote_addr", r.RemoteAddr),
+			}
+
+			// Condition-based logs
+			threshold := logger.GlobalConfig.SlowRequestThreshold
+			if threshold == 0 {
+				threshold = 1000 * time.Millisecond
+			}
+
+			if duration > threshold {
+				ctxLogger.Warn("slow request detected", fields...)
 			}
 
 			// Level logic: 2xx = INFO, 4xx = WARN, 5xx = ERROR

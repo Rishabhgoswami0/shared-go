@@ -2,11 +2,26 @@ package middleware
 
 import (
 	"net/http"
+	"strings"
 
+	"github.com/google/uuid"
+	sharedctx "github.com/Rishabhgoswami0/shared-go/pkg/context"
 	apperrors "github.com/Rishabhgoswami0/shared-go/pkg/errors"
 	"github.com/Rishabhgoswami0/shared-go/pkg/logger"
 	"go.uber.org/zap"
 )
+
+func safeRequestID(r *http.Request) string {
+	id := r.Header.Get("X-Request-ID")
+	if len(id) > 0 && len(id) <= 64 {
+		return id
+	}
+	return ""
+}
+
+func generateTraceID() string {
+	return strings.ReplaceAll(uuid.New().String(), "-", "")
+}
 
 // PanicRecovery catches any panic in downstream handlers, logs the full stack
 // trace, and returns an RFC 7807 Internal Server Error response via WriteError.
@@ -17,6 +32,21 @@ func PanicRecovery(next http.Handler) http.Handler {
 			if rec := recover(); rec != nil {
 				// Use context-aware logger to capture any IDs already present
 				ctxLogger := logger.FromContext(r.Context())
+
+				reqID := sharedctx.GetRequestID(r.Context())
+				if reqID == "" {
+					reqID = safeRequestID(r)
+				}
+
+				traceID := sharedctx.GetTraceID(r.Context())
+				if traceID == "" {
+					traceID = generateTraceID()
+				}
+
+				ctxLogger = ctxLogger.With(
+					zap.String("request_id", reqID),
+					zap.String("trace_id", traceID),
+				)
 
 				ctxLogger.Error("panic recovered",
 					zap.Any("panic", rec),
