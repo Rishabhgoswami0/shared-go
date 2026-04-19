@@ -1,61 +1,46 @@
 package auth
 
 import (
+	"crypto/rsa"
 	"fmt"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
-	"github.com/google/uuid"
 )
 
-// CustomClaims represents the standard JWT claims along with our custom session_id claim.
+// TokenType represents if the token is for a user or a service
+type TokenType string
+
+const (
+	TokenTypeUser    TokenType = "user"
+	TokenTypeService TokenType = "service"
+)
+
+// CustomClaims represents standard and custom claims for the application
 type CustomClaims struct {
-	SessionID string `json:"session_id"`
-	UserID    string `json:"user_id"`
+	TenantID  string    `json:"tenant_id,omitempty"`
+	Roles     []string  `json:"roles,omitempty"`
+	Type      TokenType `json:"type,omitempty"`
+	Scope     string    `json:"scope,omitempty"`
+	SessionID string    `json:"session_id,omitempty"` // For backwards compatibility
 	jwt.RegisteredClaims
 }
 
-// GenerateToken generates a JWT that includes a newly generated UUID as the session_id.
-// It returns the encoded token string, the generated session_id, and any error encountered.
-func GenerateToken(userID string, secretKey []byte) (string, string, error) {
-	sessionID := uuid.New().String()
+// GenerateRS256Token signs a token using the provided RSA private key and inserts 'kid' in headers
+func GenerateRS256Token(claims CustomClaims, privateKey *rsa.PrivateKey, kid string) (string, error) {
+	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+	token.Header["kid"] = kid
 
-	claims := CustomClaims{
-		SessionID: sessionID,
-		UserID:    userID,
-		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(time.Now().Add(24 * time.Hour)),
-			IssuedAt:  jwt.NewNumericDate(time.Now()),
-			Issuer:    "shared-go-auth",
-		},
-	}
-
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	signedToken, err := token.SignedString(secretKey)
+	signedToken, err := token.SignedString(privateKey)
 	if err != nil {
-		return "", "", fmt.Errorf("failed to sign token: %w", err)
+		return "", fmt.Errorf("failed to sign token: %w", err)
 	}
 
-	return signedToken, sessionID, nil
+	return signedToken, nil
 }
 
-// ValidateToken parses the token string, validates the signature, and extracts/returns the session_id and user_id.
-func ValidateToken(tokenString string, secretKey []byte) (string, string, error) {
-	token, err := jwt.ParseWithClaims(tokenString, &CustomClaims{}, func(token *jwt.Token) (interface{}, error) {
-		// Validate the alg is what we expect
-		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
-		}
-		return secretKey, nil
-	})
-
-	if err != nil {
-		return "", "", fmt.Errorf("failed to parse token: %w", err)
-	}
-
-	if claims, ok := token.Claims.(*CustomClaims); ok && token.Valid {
-		return claims.SessionID, claims.UserID, nil
-	}
-
-	return "", "", fmt.Errorf("invalid token")
+// ParseWithLeeway parses a JWT token while applying a clock skew (leeway) of ±30 seconds.
+// It returns the parsed token, supporting key identification via 'kid' in the header.
+func ParseWithLeeway(tokenString string, keyFunc jwt.Keyfunc) (*jwt.Token, error) {
+	return jwt.ParseWithClaims(tokenString, &CustomClaims{}, keyFunc, jwt.WithLeeway(30*time.Second))
 }
