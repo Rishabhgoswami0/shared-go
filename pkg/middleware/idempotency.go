@@ -6,7 +6,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"io"
+	"log"
 	"net/http"
+	"time"
 
 	"github.com/Rishabhgoswami0/shared-go/pkg/auth"
 	apperrors "github.com/Rishabhgoswami0/shared-go/pkg/errors"
@@ -25,6 +27,7 @@ const (
 type IdempotencyRecord struct {
 	RequestHash string
 	Status      IdempotencyStatus
+	CreatedAt   time.Time
 }
 
 // IdempotencyStore defines how a service stores and retrieves idempotency keys.
@@ -91,19 +94,20 @@ func IdempotencyMiddleware(store IdempotencyStore) func(http.Handler) http.Handl
 				}
 
 				if record.Status == StatusCompleted {
-					// Phase 1: Return generic success or custom response.
-					// Since we don't store the full response in phase 1, we can just return a 200/201.
-					// To be perfectly robust, you'd store the response headers/body and replay them.
-					// Since we return generic "Success", we will write a generic structure.
-					// Adjust as needed for specific service requirements.
 					w.WriteHeader(http.StatusOK)
 					w.Write([]byte(`{"message": "Request already processed successfully", "idempotent": true}`))
 					return
 				}
 
-				// Status is IN_PROGRESS (or FAILED and we don't support retry yet)
-				apperrors.WriteError(w, r, apperrors.NewBadRequest(apperrors.CodeValidationFailed, "Request is already being processed", nil))
-				return
+				// Stale Check (Phase 2): If stuck IN_PROGRESS > 60s, allow retry.
+				if record.Status == StatusInProgress && time.Since(record.CreatedAt) > 60*time.Second {
+					// Fallthrough and allow CreateRecord (which should overwrite/replace in a robust store, or we can handle it here)
+					log.Printf("[Idempotency] Stale record found for key %s (created %v), allowing recovery", idempotencyKey, record.CreatedAt)
+				} else {
+					// Status is IN_PROGRESS and NOT stale, or FAILED and we don't support retry yet
+					apperrors.WriteError(w, r, apperrors.NewBadRequest(apperrors.CodeValidationFailed, "Request is already being processed", nil))
+					return
+				}
 			}
 
 			// 4. Create IN_PROGRESS record

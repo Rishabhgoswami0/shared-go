@@ -11,7 +11,7 @@ type AuditFields struct {
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 
-	CreatedByID   uuid.UUID `json:"created_by_id"`
+	CreatedByID   *uuid.UUID `json:"created_by_id"`
 	CreatedByType string    `json:"created_by_type"` // "user" | "system" | "service"
 	CreatedByName string    `json:"created_by_name"`
 }
