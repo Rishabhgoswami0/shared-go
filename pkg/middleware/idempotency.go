@@ -33,32 +33,29 @@ type IdempotencyStore interface {
 	// If it already exists, it should return the existing record and a custom error (e.g., ErrKeyExists).
 	// For simplicity in Phase 1, we assume returning the existing record if found, or nil if newly inserted as IN_PROGRESS.
 	GetRecord(ctx context.Context, idempotencyKey, userID, tenantID, endpoint string) (*IdempotencyRecord, error)
-	
+
 	// CreateRecord inserts the initial IN_PROGRESS record. Must be atomic.
 	CreateRecord(ctx context.Context, idempotencyKey, userID, tenantID, endpoint, requestHash string) error
-	
+
 	// UpdateStatus transitions the record (e.g. IN_PROGRESS -> COMPLETED).
 	UpdateStatus(ctx context.Context, idempotencyKey string, status IdempotencyStatus) error
 }
 
-// IdempotencyMiddleware ensures that requests with an "Idempotency-Key" header 
+// IdempotencyMiddleware ensures that requests with an "Idempotency-Key" header
 // are executed exactly once per user/tenant/endpoint combination.
 func IdempotencyMiddleware(store IdempotencyStore) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			idempotencyKey := r.Header.Get("Idempotency-Key")
 			if idempotencyKey == "" {
-				// We enforce its presence? The spec says "Always validate Idempotency-Key presence"
-				// but this middleware might only be attached to mutating endpoints.
-				// We will assume if attached, it's required.
-				apperrors.WriteError(w, r, apperrors.NewInvalidRequest("MISSING_IDEMPOTENCY_KEY", "Idempotency-Key header is required", nil))
+				apperrors.WriteError(w, r, apperrors.NewBadRequest(apperrors.CodeValidationFailed, "Idempotency-Key header is required", nil))
 				return
 			}
 
 			// 1. Extract Identity from Context (Assuming AuthMiddleware has already run)
-			identity, ok := auth.GetIdentity(r.Context())
+			identity, ok := auth.FromContext(r.Context())
 			if !ok {
-				apperrors.WriteError(w, r, apperrors.NewInternal("IDENTITY_MISSING", "Failed to retrieve identity from request context", nil))
+				apperrors.WriteError(w, r, apperrors.NewInternalError(apperrors.CodeInternal, "Failed to retrieve identity from request context", nil))
 				return
 			}
 
@@ -69,7 +66,7 @@ func IdempotencyMiddleware(store IdempotencyStore) func(http.Handler) http.Handl
 			// Read the body, hash it, and restore the body so the handler can read it.
 			bodyBytes, err := io.ReadAll(r.Body)
 			if err != nil {
-				apperrors.WriteError(w, r, apperrors.NewInternal("REQUEST_READ_ERROR", "Failed to read request body", err))
+				apperrors.WriteError(w, r, apperrors.NewInternalError(apperrors.CodeInternal, "Failed to read request body", err))
 				return
 			}
 			// Restore the io.ReadCloser
@@ -82,14 +79,14 @@ func IdempotencyMiddleware(store IdempotencyStore) func(http.Handler) http.Handl
 			// 3. Check Existing Record
 			record, err := store.GetRecord(r.Context(), idempotencyKey, userID, tenantID, endpoint)
 			if err != nil {
-				apperrors.WriteError(w, r, apperrors.NewInternal("IDEMPOTENCY_STORE_ERROR", "Failed to check idempotency store", err))
+				apperrors.WriteError(w, r, apperrors.NewInternalError(apperrors.CodeInternal, "Failed to check idempotency store", err))
 				return
 			}
 
 			if record != nil {
 				// Record exists
 				if record.RequestHash != requestHash {
-					apperrors.WriteError(w, r, apperrors.NewInvalidRequest("IDEMPOTENCY_HASH_MISMATCH", "Idempotency key reused with different request payload", nil))
+					apperrors.WriteError(w, r, apperrors.NewBadRequest(apperrors.CodeValidationFailed, "Idempotency key reused with different request payload", nil))
 					return
 				}
 
@@ -105,7 +102,7 @@ func IdempotencyMiddleware(store IdempotencyStore) func(http.Handler) http.Handl
 				}
 
 				// Status is IN_PROGRESS (or FAILED and we don't support retry yet)
-				apperrors.WriteError(w, r, apperrors.NewInvalidRequest("IDEMPOTENCY_IN_PROGRESS", "Request is already being processed", nil))
+				apperrors.WriteError(w, r, apperrors.NewBadRequest(apperrors.CodeValidationFailed, "Request is already being processed", nil))
 				return
 			}
 
@@ -113,7 +110,7 @@ func IdempotencyMiddleware(store IdempotencyStore) func(http.Handler) http.Handl
 			err = store.CreateRecord(r.Context(), idempotencyKey, userID, tenantID, endpoint, requestHash)
 			if err != nil {
 				// Handle unique constraint violation assuming it might be a race condition
-				apperrors.WriteError(w, r, apperrors.NewInternal("IDEMPOTENCY_CREATE_ERROR", "Failed to create idempotency record", err))
+				apperrors.WriteError(w, r, apperrors.NewInternalError(apperrors.CodeInternal, "Failed to create idempotency record", err))
 				return
 			}
 
@@ -121,7 +118,7 @@ func IdempotencyMiddleware(store IdempotencyStore) func(http.Handler) http.Handl
 			// We use a simplified wrapper to capture if the request succeeded.
 			// Next steps: execute business logic
 			cw := &captureWriter{ResponseWriter: w, statusCode: http.StatusOK}
-			
+
 			next.ServeHTTP(cw, r)
 
 			// 6. Update status based on success/failure
