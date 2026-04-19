@@ -80,10 +80,10 @@ type PoolConfig struct {
 // DefaultPoolConfig returns sensible production defaults.
 func DefaultPoolConfig() PoolConfig {
 	return PoolConfig{
-		MaxOpenConns:    100,
-		MaxIdleConns:    20,
-		ConnMaxLifetime: 5 * time.Minute,
-		IdleTTL:         30 * time.Minute,
+		MaxOpenConns:      100,
+		MaxIdleConns:      20,
+		ConnMaxLifetime:   5 * time.Minute,
+		IdleTTL:           30 * time.Minute,
 		EnableReadReplica: false,
 	}
 }
@@ -107,13 +107,13 @@ type TenantDBPool struct {
 	encryptionKey string // AES-256-GCM key (raw string, derived via SHA-256)
 	mu            sync.RWMutex
 	pools         map[string]*TenantConnPair
-	
+
 	// Cache for Master DB lookups (Phase 2)
 	lookupMu      sync.RWMutex
 	lookupEntries map[string]*cachedRecord // key: tenantID + ":" + serviceCode
 	lookupTTL     time.Duration
 
-	stopCh        chan struct{}
+	stopCh chan struct{}
 }
 
 // NewTenantDBPool creates a pool manager and starts the background idle-evictor.
@@ -173,7 +173,7 @@ func (p *TenantDBPool) Get(ctx context.Context, tenantID, serviceCode string) (*
 		if err != nil {
 			return nil, err
 		}
-		
+
 		// Update lookup cache
 		p.lookupMu.Lock()
 		p.lookupEntries[cacheKey] = &cachedRecord{
