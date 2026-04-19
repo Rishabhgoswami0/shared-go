@@ -1,49 +1,43 @@
-# Shared Go Library
+# Shared Go Library (`shared-go`)
 
-A centralized repository of common Go packages, utilities, and middleware used across the multi-tenant microservice fleet. Hosted at `github.com/Rishabhgoswami0/shared-go`.
+The core engine of the microservice ecosystem. This library provides standardized utilities for multi-tenant database pooling, idempotency, audit compliance, and error handling.
 
-## 📦 Available Packages
+## 🏗️ Core Modules
 
-### 🔒 `pkg/auth`
-Production-grade authentication utilities based on **RS256** and **JWKS**.
-- `CustomClaims`: Standardized JWT claims including `tenant_id` and `roles`.
-- `AuthMiddleware`: High-performance middleware for JWKS validation and identity injection.
-- `JWKSClient`: Caching client for automated public key fetching.
+### 1. Database Management (`pkg/database`)
+-   **`TenantDBPool`**: A high-performance connection manager that resolves tenant-specific DSNs from the Master Registry.
+    -   **In-Memory Caching**: DSNs are cached with a configurable TTL (default 5m) to prevent Master DB contention.
+    -   **Service-Specific Resolution**: Supports cross-service isolation where different services (AUTH, REGISTRATION) can have unique DB clusters for the same tenant.
+-   **`Encryption`**: AES-256-GCM utilities for encrypting sensitive DSNs at rest in the Master DB.
 
-### 🗄️ `pkg/db`
-Database abstraction layer for multi-tenant sharding.
-- `DatabaseConfig`: Standardized configuration for Master and Tenant DBs.
-- `TenantPool`: Management of concurrent connections to multiple organization shards.
-- `Encryption`: AES-256-GCM utilities for securing DSNs at rest.
+### 2. Middleware (`pkg/middleware`)
+-   **`IdempotencyMiddleware`**: Protects mutating endpoints (POST/PUT/DELETE) from double-submission.
+    -   **Stale Request Recovery**: Automatically unlocks `IN_PROGRESS` requests after 60 seconds if the original worker died.
+-   **`TenantMiddleware`**: Injects tenant metadata from the JWT into the request context.
+-   **`CorrelationMiddleware`**: Generates and propagates `X-Request-ID` for cross-service logging.
 
-### 🚨 `pkg/errors`
-Standardized error handling implementing **RFC 7807** (Problem Details for HTTP APIs).
-- `WriteError`: Responder for consistent JSON error structures.
-- `AppError`: Domain-specific error types with Request-ID correlation.
+### 3. Models & Audit (`pkg/models`)
+-   **`AuditFields`**: Standardized struct for tracking record lifecycle (`created_by_id`, `created_at`, etc.).
+-   **System vs User Support**: Supports nullable `CreatedByID` to distinguish between human-initiated and system-triggered actions.
 
-### 📝 `pkg/logging`
-Structured logging wrappers around `zap`.
-- Consistent log levels and tenant/request metadata injection.
-
----
-
-## 🛠️ Usage in Microservices
-
-Add the library to your `go.mod`:
-```bash
-go get github.com/Rishabhgoswami0/shared-go@latest
-```
-
-Ensure `GOPRIVATE` is configured if the repository is private:
-```bash
-export GOPRIVATE=github.com/Rishabhgoswami0/*
-```
+### 4. Identity & Auth (`pkg/auth`)
+-   **`JWKSClient`**: High-performance public key fetcher and validator with background rotation support.
+-   **`AuthMiddleware`**: Enforces RS256 JWT validation and requirement checks.
 
 ---
 
-## 🚀 Contribution & Versioning
-This library follows Semantic Versioning. Major architectural changes must be tagged and pushed to GitHub for services to pull via `go mod`.
-```bash
-git tag vX.X.X
-git push origin vX.X.X
-```
+## ⚙️ Shared Constants
+
+The library defines standardized identifiers for the whole platform:
+-   **Service Codes**: `AUTH`, `REGISTRATION`, `TENANT_MGMT`.
+-   **Tenant Namespace**: Fixed UUID used for deterministic **UUID v5** generation.
+
+---
+
+## 🛠️ Usage for Developers
+
+When creating a new service:
+1.  Initialize the **Master DB** connection in `main.go`.
+2.  Initialize the `TenantDBPool` using the Master DB.
+3.  Inject the `Pool` into your repositories or middleware.
+4.  Use `WriterFromContext(ctx)` in your database operations to support transaction propagation.
