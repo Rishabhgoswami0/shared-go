@@ -60,7 +60,7 @@ func AuthMiddleware(jwksClient *JWKSClient, expectedIss string, expectedAud stri
 				Subject:  claims.Subject,
 				TenantID: claims.TenantID,
 				Roles:    claims.Roles,
-				JTI:      claims.JTI,
+				JTI:      claims.ID,
 				Type:     claims.Type,
 				Scope:    claims.Scope,
 			}
