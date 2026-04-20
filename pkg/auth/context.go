@@ -12,6 +12,7 @@ const (
 	RoleSuperAdmin = "SUPER_ADMIN"
 
 	ServiceRegistration = "REGISTRATION"
+	ServiceAuth         = "AUTH"
 	ServiceGlobal       = "GLOBAL"
 )
 
