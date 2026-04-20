@@ -2,7 +2,6 @@ package middleware
 
 import (
 	"context"
-	"fmt"
 	"net/http"
 	"strings"
 
@@ -89,7 +88,7 @@ func (rl *RateLimiter) buildClientKey(r *http.Request) string {
 	// Stable vFinal Strategy: /login -> IP, authenticated -> user:IP
 	userID := sharedctx.GetUserID(r.Context())
 	if userID != "" {
-		return fmt.Sprintf("%s:%s", userID, ip)
+		return userID + ":" + ip
 	}
 
 	return ip

@@ -13,6 +13,7 @@ const (
 	TraceIDKey   contextKey = "trace_id"
 	TenantIDKey  contextKey = "tenant_id"
 	ClientIPKey  contextKey = "client_ip"
+	UserIDKey    contextKey = "user_id"
 )
 
 // WithRequestID returns a new context with the provided request ID.
@@ -76,6 +77,19 @@ func WithClientIP(ctx context.Context, ip string) context.Context {
 func GetClientIP(ctx context.Context) string {
 	if ip, ok := ctx.Value(ClientIPKey).(string); ok {
 		return ip
+	}
+	return ""
+}
+
+// WithUserID adds a user ID to the context.
+func WithUserID(ctx context.Context, userID string) context.Context {
+	return context.WithValue(ctx, UserIDKey, userID)
+}
+
+// GetUserID retrieves the user ID from the context.
+func GetUserID(ctx context.Context) string {
+	if userID, ok := ctx.Value(UserIDKey).(string); ok {
+		return userID
 	}
 	return ""
 }
