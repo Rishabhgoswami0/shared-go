@@ -2,9 +2,7 @@ package errors
 
 import (
 	"encoding/json"
-	"fmt"
 	"net/http"
-	"strings"
 	"time"
 
 	sharedctx "github.com/Rishabhgoswami0/shared-go/pkg/context"
@@ -34,7 +32,7 @@ func mapErrorType(code string) string {
 // WriteError is the single, canonical function for writing error responses.
 func WriteError(w http.ResponseWriter, r *http.Request, err error) {
 	ctx := r.Context()
-	
+
 	// Classify error to AppError
 	appErr := FromError(err)
 
@@ -44,7 +42,9 @@ func WriteError(w http.ResponseWriter, r *http.Request, err error) {
 	// Inject context metadata if missing
 	if appErr.RequestID == "" {
 		appErr.RequestID = sharedctx.GetRequestID(ctx)
-		if appErr.RequestID == "" { appErr.RequestID = "unknown" } // Fallback
+		if appErr.RequestID == "" {
+			appErr.RequestID = "unknown"
+		} // Fallback
 	}
 	if appErr.TraceID == "" {
 		appErr.TraceID = sharedctx.GetTraceID(ctx)
@@ -89,7 +89,7 @@ func WriteError(w http.ResponseWriter, r *http.Request, err error) {
 
 	// ── HTTP Response (vFinal+ Strict Header Ordering) ───────────────────
 	w.Header().Set("Content-Type", "application/problem+json")
-	
+
 	// Default Retry-After for limiters if developer missed it
 	if appErr.Status == http.StatusTooManyRequests && appErr.RetryAfter == "" {
 		w.Header().Set("Retry-After", "60")
