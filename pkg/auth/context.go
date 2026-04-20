@@ -4,13 +4,23 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 )
+
+const (
+	RoleAdmin      = "ADMIN"
+	RoleSuperAdmin = "SUPER_ADMIN"
+
+	ServiceRegistration = "REGISTRATION"
+	ServiceGlobal       = "GLOBAL"
+)
+
 
 // AuthContext represents the authenticated identity
 type AuthContext struct {
 	Subject  string
 	TenantID string
-	Roles    []string
+	Roles    map[string][]string
 	JTI      string
 	Type     TokenType
 	Scope    string
@@ -51,12 +61,38 @@ func EnforceTenant(ctx AuthContext, requestedTenant string) error {
 	return nil
 }
 
-// RequireRole checks if the authenticated context possesses a specific role.
-func RequireRole(ctx AuthContext, role string) error {
-	for _, r := range ctx.Roles {
-		if r == role {
-			return nil
+// HasRole checks if the authenticated context possesses a specific role for a given service.
+// Both service and role are case-insensitive as they are normalized using strings.ToUpper.
+func (ctx AuthContext) HasRole(service, role string) bool {
+	if ctx.Roles == nil {
+		return false
+	}
+
+	normService := strings.ToUpper(service)
+	normRole := strings.ToUpper(role)
+
+	roles, ok := ctx.Roles[normService]
+	if !ok {
+		// Fallback to "GLOBAL" if the specific service doesn't have it
+		roles, ok = ctx.Roles[ServiceGlobal]
+		if !ok {
+			return false
 		}
 	}
-	return fmt.Errorf("forbidden: requires role %s", role)
+
+	for _, r := range roles {
+		if strings.ToUpper(r) == normRole {
+			return true
+		}
+	}
+	return false
+}
+
+// RequireRole checks if the authenticated context possesses a specific role for a given service.
+// This is a wrapper around HasRole that returns an error for middleware usage.
+func RequireRole(ctx AuthContext, service, role string) error {
+	if ctx.HasRole(service, role) {
+		return nil
+	}
+	return fmt.Errorf("forbidden: requires role %s for service %s", role, service)
 }

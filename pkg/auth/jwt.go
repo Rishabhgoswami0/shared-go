@@ -19,7 +19,7 @@ const (
 // CustomClaims represents standard and custom claims for the application
 type CustomClaims struct {
 	TenantID  string    `json:"tenant_id,omitempty"`
-	Roles     []string  `json:"roles,omitempty"`
+	Roles     map[string][]string `json:"roles,omitempty"`
 	Type      TokenType `json:"type,omitempty"`
 	Scope     string    `json:"scope,omitempty"`
 	SessionID string    `json:"session_id,omitempty"` // For backwards compatibility
