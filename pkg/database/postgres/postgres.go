@@ -91,3 +91,23 @@ func connectWithRetry(connStr string, retries int, interval time.Duration) (*sql
 
 	return nil, fmt.Errorf("after %d attempts, failed to connect: %w", retries, err)
 }
+
+// RunInTx executes a function within a transaction on the provided DB.
+func RunInTx(ctx context.Context, db *sql.DB, fn func(tx *sql.Tx) error) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin transaction: %w", err)
+	}
+
+	if err := fn(tx); err != nil {
+		tx.Rollback()
+		return err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit transaction: %w", err)
+	}
+
+	return nil
+}
+

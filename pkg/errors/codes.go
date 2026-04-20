@@ -13,6 +13,9 @@ const (
 	CodeUnauthorized       ErrorCode = "UNAUTHORIZED"
 	CodeForbidden          ErrorCode = "FORBIDDEN"
 	CodeTooManyRequests    ErrorCode = "TOO_MANY_REQUESTS"
+	CodeUserExists         ErrorCode = "AUTH_USER_EXISTS"
+	CodeInvalidInternalSignature ErrorCode = "INVALID_INTERNAL_SIGNATURE"
 	CodeServiceUnavailable ErrorCode = "SERVICE_UNAVAILABLE"
+
 	CodeClientClosed       ErrorCode = "CLIENT_CLOSED_REQUEST"
 )
