@@ -13,8 +13,19 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Rishabhgoswami0/shared-go/pkg/logger"
 	"github.com/golang-jwt/jwt/v5"
+	"go.uber.org/zap"
 )
+
+// JWKSOptions allows for fine-tuning the JWKS client behavior.
+type JWKSOptions struct {
+	AllowHTTP bool
+	Timeout   time.Duration
+	Retries   int
+	Backoff   time.Duration
+	FailOpen  bool // If true, allows startup even if initial fetch fails
+}
 
 // JWKS represents the JSON Web Key Set structure
 type JWKS struct {
@@ -36,6 +47,7 @@ type JWKSClient struct {
 	jwksURL     *url.URL
 	expectedIss string
 	ttl         time.Duration
+	opts        JWKSOptions
 	client      *http.Client
 
 	mu        sync.RWMutex
@@ -45,16 +57,26 @@ type JWKSClient struct {
 	refreshing atomic.Bool
 }
 
-// NewJWKSClient initializes a new JWKS client
+// NewJWKSClient initializes a new JWKS client with default options and env-var fallback.
 func NewJWKSClient(jwksURLRaw, expectedIss string, ttl time.Duration) (*JWKSClient, error) {
+	opts := JWKSOptions{
+		AllowHTTP: os.Getenv("JWKS_ALLOW_HTTP") == "true",
+		Timeout:   2 * time.Second,
+		Retries:   3,
+		Backoff:   500 * time.Millisecond,
+	}
+	return NewJWKSClientWithOptions(jwksURLRaw, expectedIss, ttl, opts)
+}
+
+// NewJWKSClientWithOptions initializes a new JWKS client with explicit options.
+func NewJWKSClientWithOptions(jwksURLRaw, expectedIss string, ttl time.Duration, opts JWKSOptions) (*JWKSClient, error) {
 	u, err := url.Parse(jwksURLRaw)
 	if err != nil {
 		return nil, fmt.Errorf("invalid JWKS URL: %w", err)
 	}
 
-	allowHTTP := os.Getenv("JWKS_ALLOW_HTTP") == "true"
-	if !allowHTTP && u.Scheme != "https" {
-		return nil, fmt.Errorf("JWKS URL must use HTTPS strictly. Use JWKS_ALLOW_HTTP=true to bypass in dev")
+	if !opts.AllowHTTP && u.Scheme != "https" {
+		return nil, fmt.Errorf("JWKS URL must use HTTPS strictly. Use AllowHTTP option for dev")
 	}
 
 	issURL, err := url.Parse(expectedIss)
@@ -66,56 +88,86 @@ func NewJWKSClient(jwksURLRaw, expectedIss string, ttl time.Duration) (*JWKSClie
 		return nil, fmt.Errorf("JWKS domain %s does not match expected issuer domain %s", u.Host, issURL.Host)
 	}
 
+	if opts.Timeout == 0 {
+		opts.Timeout = 2 * time.Second
+	}
+
 	c := &JWKSClient{
 		jwksURL:     u,
 		expectedIss: expectedIss,
 		ttl:         ttl,
+		opts:        opts,
 		client: &http.Client{
-			Timeout: 2 * time.Second, // 2s timeout constraint
+			Timeout: opts.Timeout,
 		},
 		keys: make(map[string]*rsa.PublicKey),
 	}
 
-	// Attempt initial fetch
-	c.refresh()
+	// Attempt initial fetch (sync)
+	if err := c.refresh(); err != nil && !opts.FailOpen {
+		return nil, fmt.Errorf("initial JWKS fetch failed: %w", err)
+	}
 
 	return c, nil
 }
 
-// refresh performs the actual HTTP fetch and updates the keys
+// refresh performs the actual HTTP fetch and updates the keys with retry logic if configured.
 func (c *JWKSClient) refresh() error {
-	resp, err := c.client.Get(c.jwksURL.String())
-	if err != nil {
-		return fmt.Errorf("failed to fetch JWKS: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("unexpected status code from JWKS: %d", resp.StatusCode)
+	var lastErr error
+	maxAttempts := c.opts.Retries + 1
+	if maxAttempts < 1 {
+		maxAttempts = 1
 	}
 
-	var jwks JWKS
-	if err := json.NewDecoder(resp.Body).Decode(&jwks); err != nil {
-		return fmt.Errorf("failed to decode JWKS: %w", err)
-	}
-
-	parsedKeys := make(map[string]*rsa.PublicKey)
-	for _, key := range jwks.Keys {
-		if key.Kty == "RSA" && key.Use == "sig" {
-			pubKey, err := c.parseRSA(key)
-			if err != nil {
-				continue // skip invalid keys
-			}
-			parsedKeys[key.Kid] = pubKey
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		if attempt > 0 {
+			time.Sleep(c.opts.Backoff * time.Duration(attempt))
 		}
+
+		resp, err := c.client.Get(c.jwksURL.String())
+		if err != nil {
+			lastErr = fmt.Errorf("failed to fetch JWKS (attempt %d): %w", attempt+1, err)
+			continue
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			lastErr = fmt.Errorf("unexpected status code from JWKS (attempt %d): %d", attempt+1, resp.StatusCode)
+			continue
+		}
+
+		var jwks JWKS
+		if err := json.NewDecoder(resp.Body).Decode(&jwks); err != nil {
+			lastErr = fmt.Errorf("failed to decode JWKS (attempt %d): %w", attempt+1, err)
+			continue
+		}
+
+		parsedKeys := make(map[string]*rsa.PublicKey)
+		for _, key := range jwks.Keys {
+			// RS256 algorithm enforcement & RSA/sig check
+			if key.Kty == "RSA" && key.Use == "sig" && key.Alg == "RS256" {
+				pubKey, err := c.parseRSA(key)
+				if err != nil {
+					continue // skip invalid keys
+				}
+				parsedKeys[key.Kid] = pubKey
+			}
+		}
+
+		if len(parsedKeys) == 0 {
+			lastErr = fmt.Errorf("no valid RS256 keys found in JWKS (attempt %d)", attempt+1)
+			continue
+		}
+
+		c.mu.Lock()
+		c.keys = parsedKeys
+		c.fetchedAt = time.Now()
+		c.mu.Unlock()
+
+		return nil
 	}
 
-	c.mu.Lock()
-	c.keys = parsedKeys
-	c.fetchedAt = time.Now()
-	c.mu.Unlock()
-
-	return nil
+	return lastErr
 }
 
 // parseRSA converts a JWK to an rsa.PublicKey
@@ -152,7 +204,12 @@ func (c *JWKSClient) GetKey(kid string) (*rsa.PublicKey, error) {
 		if c.refreshing.CompareAndSwap(false, true) {
 			go func() {
 				defer c.refreshing.Store(false)
-				c.refresh() // Fallback: if it fails, we keep the stale keys as is
+				if err := c.refresh(); err != nil {
+					logger.Error("background JWKS refresh failed",
+						zap.Error(err),
+						zap.String("url", c.jwksURL.String()),
+					)
+				}
 			}()
 		}
 	}
