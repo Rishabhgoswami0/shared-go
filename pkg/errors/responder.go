@@ -38,19 +38,16 @@ func WriteError(w http.ResponseWriter, r *http.Request, err error) {
 	// Classify error to AppError
 	appErr := FromError(err)
 
-	// Inject context metadata into the response object if missing
+	// Mandate instance URI (vFinal+ rule)
+	appErr.Instance = r.URL.Path
+
+	// Inject context metadata if missing
 	if appErr.RequestID == "" {
 		appErr.RequestID = sharedctx.GetRequestID(ctx)
+		if appErr.RequestID == "" { appErr.RequestID = "unknown" } // Fallback
 	}
 	if appErr.TraceID == "" {
 		appErr.TraceID = sharedctx.GetTraceID(ctx)
-	}
-
-	if appErr.RequestID != "" && appErr.Instance == "" {
-		// Professional instance URI: lowercase k-case for the error code
-		// e.g. /errors/bad-request/uuid-123
-		codePart := strings.ReplaceAll(strings.ToLower(string(appErr.Code)), "_", "-")
-		appErr.Instance = fmt.Sprintf("/errors/%s/%s", codePart, appErr.RequestID)
 	}
 
 	// ── Structured Logging ────────────────────────────────────────────────
@@ -90,7 +87,7 @@ func WriteError(w http.ResponseWriter, r *http.Request, err error) {
 		}
 	}
 
-	// ── HTTP Response ─────────────────────────────────────────────────────
+	// ── HTTP Response (vFinal+ Strict Header Ordering) ───────────────────
 	w.Header().Set("Content-Type", "application/problem+json")
 	
 	// Default Retry-After for limiters if developer missed it
@@ -104,14 +101,5 @@ func WriteError(w http.ResponseWriter, r *http.Request, err error) {
 
 	if encErr := json.NewEncoder(w).Encode(appErr); encErr != nil {
 		ctxLogger.Error("failed to encode error response", zap.Error(encErr))
-	}
-}
-
-// WriteJSON writes a successful JSON response with the given status code.
-func WriteJSON(w http.ResponseWriter, status int, data any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	if err := json.NewEncoder(w).Encode(data); err != nil {
-		logger.Error("failed to encode JSON response", zap.Error(err))
 	}
 }

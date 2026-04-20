@@ -36,6 +36,9 @@ func PanicRecovery(next http.Handler) http.Handler {
 				reqID := sharedctx.GetRequestID(r.Context())
 				if reqID == "" {
 					reqID = safeRequestID(r)
+					if reqID == "" {
+						reqID = uuid.New().String() // Senior feedback: guaranteed fallback
+					}
 				}
 
 				traceID := sharedctx.GetTraceID(r.Context())
