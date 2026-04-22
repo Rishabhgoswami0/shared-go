@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/big"
 	"strings"
 )
 
@@ -140,4 +141,16 @@ func DecryptDSN(encryptedDSN, encryptionKey string) (string, error) {
 	}
 
 	return string(plaintext), nil
+}
+
+// RandomInt generates a cryptographically secure random integer in the range [0, max).
+func RandomInt(max int) (int, error) {
+	if max <= 0 {
+		return 0, fmt.Errorf("RandomInt: max must be positive")
+	}
+	n, err := rand.Int(rand.Reader, big.NewInt(int64(max)))
+	if err != nil {
+		return 0, err
+	}
+	return int(n.Int64()), nil
 }
