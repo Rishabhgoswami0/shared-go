@@ -20,6 +20,7 @@ const (
 // AuthContext represents the authenticated identity
 type AuthContext struct {
 	Subject  string
+	Name     string
 	TenantID string
 	Roles    map[string][]string
 	JTI      string
