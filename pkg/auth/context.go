@@ -65,6 +65,8 @@ func EnforceTenant(ctx AuthContext, requestedTenant string) error {
 
 // HasRole checks if the authenticated context possesses a specific role for a given service.
 // Both service and role are case-insensitive as they are normalized using strings.ToUpper.
+// This is the CORE logic for authorization. It implements the hierarchy:
+// SUPER_ADMIN (Global) > TENANT_ADMIN (Global) > Service Role
 func (ctx AuthContext) HasRole(service, role string) bool {
 	if ctx.Roles == nil {
 		return false
@@ -73,13 +75,21 @@ func (ctx AuthContext) HasRole(service, role string) bool {
 	normService := strings.ToUpper(service)
 	normRole := strings.ToUpper(role)
 
+	// 1. Hierarchy Level 1: SUPER_ADMIN bypasses all checks
+	if ctx.IsSuperAdmin() {
+		return true
+	}
+
+	// 2. Hierarchy Level 2: TENANT_ADMIN bypasses service-level checks WITHIN their tenant
+	// (Note: Tenant isolation is already enforced by middleware before this)
+	if ctx.IsTenantAdmin() && normService != ServiceGlobal {
+		return true
+	}
+
+	// 3. Hierarchy Level 3: Specific Service Role check
 	roles, ok := ctx.Roles[normService]
 	if !ok {
-		// Fallback to "GLOBAL" if the specific service doesn't have it
-		roles, ok = ctx.Roles[ServiceGlobal]
-		if !ok {
-			return false
-		}
+		return false
 	}
 
 	for _, r := range roles {
@@ -98,3 +108,46 @@ func RequireRole(ctx AuthContext, service, role string) error {
 	}
 	return fmt.Errorf("forbidden: requires role %s for service %s", role, service)
 }
+
+// IsSuperAdmin returns true if the user has the SUPER_ADMIN role globally.
+func (ctx AuthContext) IsSuperAdmin() bool {
+	globalRoles, ok := ctx.Roles[ServiceGlobal]
+	if !ok {
+		return false
+	}
+	for _, r := range globalRoles {
+		if strings.ToUpper(r) == RoleSuperAdmin {
+			return true
+		}
+	}
+	return false
+}
+
+// IsTenantAdmin returns true if the user has the TENANT_ADMIN role globally.
+// This also returns true if the user is a SUPER_ADMIN.
+func (ctx AuthContext) IsTenantAdmin() bool {
+	if ctx.IsSuperAdmin() {
+		return true
+	}
+	globalRoles, ok := ctx.Roles[ServiceGlobal]
+	if !ok {
+		return false
+	}
+	for _, r := range globalRoles {
+		if strings.ToUpper(r) == "TENANT_ADMIN" {
+			return true
+		}
+	}
+	return false
+}
+
+// HasAnyServiceRole checks if the authenticated context possesses any of the specific roles for a given service.
+func (ctx AuthContext) HasAnyServiceRole(service string, roles []string) bool {
+	for _, r := range roles {
+		if ctx.HasRole(service, r) {
+			return true
+		}
+	}
+	return false
+}
+
