@@ -51,7 +51,13 @@ func IdempotencyMiddleware(store IdempotencyStore) func(http.Handler) http.Handl
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			idempotencyKey := r.Header.Get("Idempotency-Key")
 			if idempotencyKey == "" {
-				apperrors.WriteError(w, r, apperrors.NewBadRequest(apperrors.CodeValidationFailed, "Idempotency-Key header is required", nil))
+				// Only require Idempotency-Key for non-safe methods (POST, PUT, PATCH)
+				if r.Method == http.MethodPost || r.Method == http.MethodPut || r.Method == http.MethodPatch {
+					apperrors.WriteError(w, r, apperrors.NewBadRequest(apperrors.CodeValidationFailed, "Idempotency-Key header is required", nil))
+					return
+				}
+				// Skip for GET, DELETE, etc.
+				next.ServeHTTP(w, r)
 				return
 			}
 
