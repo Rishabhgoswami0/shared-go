@@ -286,7 +286,7 @@ func (p *TenantDBPool) lookupTenant(ctx context.Context, tenantID, serviceCode s
 		return nil, fmt.Errorf("master-db lookup for tenant %q: %w", tenantID, err)
 	}
 
-	if rec.Status != "active" {
+	if strings.ToUpper(rec.Status) != "ACTIVE" {
 		return nil, fmt.Errorf("%w: tenant_id=%s status=%s", ErrTenantInactive, tenantID, rec.Status)
 	}
 	log.Println("STEP 3D: Tenant found and active:", tenantID)
