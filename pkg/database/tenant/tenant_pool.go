@@ -246,7 +246,7 @@ func (p *TenantDBPool) lookupTenant(ctx context.Context, tenantID, serviceCode s
 			c.db_read_host, c.db_read_port, c.db_read_name, c.db_read_user, c.db_read_password,
 			t.region, t.status
 		FROM tenants t
-		JOIN services s ON s.service_code = $2
+		JOIN services s ON s.service_key = $2
 		JOIN tenant_service_db_config c ON c.tenant_id = t.id AND c.service_id = s.id
 		WHERE t.id = $1
 		LIMIT 1
