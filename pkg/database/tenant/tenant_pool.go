@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -255,7 +256,16 @@ func (p *TenantDBPool) lookupTenant(ctx context.Context, tenantID, serviceCode s
 		WHERE t.id = $1 AND UPPER(c.environment) = UPPER($3)
 		LIMIT 1
 	`
-	row := p.masterRead.QueryRowContext(ctx, q, tenantID, serviceCode, p.cfg.Environment)
+	env := p.cfg.Environment
+	// Normalize common environment aliases to match database records (DEV/PROD)
+	switch strings.ToUpper(env) {
+	case "DEVELOPMENT", "LOCAL":
+		env = "DEV"
+	case "PRODUCTION":
+		env = "PROD"
+	}
+
+	row := p.masterRead.QueryRowContext(ctx, q, tenantID, serviceCode, env)
 
 	var rec TenantRecord
 	if err := row.Scan(
