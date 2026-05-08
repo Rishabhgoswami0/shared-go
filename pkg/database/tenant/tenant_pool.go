@@ -75,6 +75,9 @@ type PoolConfig struct {
 	// When false (dev default), Read points to the same pool as Write (no replica needed).
 	// [PRODUCTION] Set to true once read replicas are provisioned per tenant.
 	EnableReadReplica bool
+
+	// Environment is used to filter database configurations (e.g., "DEV", "PROD").
+	Environment string
 }
 
 // DefaultPoolConfig returns sensible production defaults.
@@ -202,7 +205,7 @@ func (p *TenantDBPool) Get(ctx context.Context, tenantID, serviceCode string) (*
 	log.Println("STEP 3H: Tenant cached:", tenantID)
 	p.mu.Unlock()
 
-	log.Printf("[TenantDBPool] loaded tenant %q (region=%s)", tenantID, record.Region)
+	log.Printf("[TenantDBPool] loaded tenant %q", tenantID)
 	return pair, nil
 }
 
@@ -242,23 +245,24 @@ func (p *TenantDBPool) lookupTenant(ctx context.Context, tenantID, serviceCode s
 	const q = `
 		SELECT 
 			t.id, 
-			c.db_write_host, c.db_write_port, c.db_write_name, c.db_write_user, c.db_write_password,
-			c.db_read_host, c.db_read_port, c.db_read_name, c.db_read_user, c.db_read_password,
-			t.region, t.status
+			c.write_db_host, c.write_db_port, c.write_db_name, c.write_db_user, c.write_db_password_hash,
+			c.read_db_host, c.read_db_port, c.read_db_name, c.read_db_user, c.read_db_password_hash,
+			t.status
 		FROM tenants t
 		JOIN services s ON s.service_key = $2
-		JOIN tenant_service_db_config c ON c.tenant_id = t.id AND c.service_id = s.id
-		WHERE t.id = $1
+		JOIN tenant_services ts ON ts.tenant_id = t.id AND ts.service_id = s.id
+		JOIN tenant_service_db_config c ON c.tenant_service_id = ts.id
+		WHERE t.id = $1 AND UPPER(c.environment) = UPPER($3)
 		LIMIT 1
 	`
-	row := p.masterRead.QueryRowContext(ctx, q, tenantID, serviceCode)
+	row := p.masterRead.QueryRowContext(ctx, q, tenantID, serviceCode, p.cfg.Environment)
 
 	var rec TenantRecord
 	if err := row.Scan(
 		&rec.TenantID,
 		&rec.WriteDB.Host, &rec.WriteDB.Port, &rec.WriteDB.Name, &rec.WriteDB.User, &rec.WriteDB.Password,
 		&rec.ReadDB.Host, &rec.ReadDB.Port, &rec.ReadDB.Name, &rec.ReadDB.User, &rec.ReadDB.Password,
-		&rec.Region, &rec.Status,
+		&rec.Status,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			// Check if tenant exists at all to return a better error
