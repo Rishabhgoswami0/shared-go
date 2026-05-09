@@ -4,39 +4,36 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
-	"fmt"
 	"strconv"
 	"time"
 )
 
-// GenerateInternalSignature creates an HMAC-SHA256 signature for internal service calls.
-// It binds the request body and a timestamp to the secret key to prevent tampering and replays.
-func GenerateInternalSignature(secret, body string, timestamp int64) string {
-	payload := fmt.Sprintf("%s:%d", body, timestamp)
+// SignRaw creates a canonical HMAC-SHA256 signature for internal service calls.
+func SignRaw(method, path, timestamp string, body []byte, secret string) string {
 	h := hmac.New(sha256.New, []byte(secret))
-	h.Write([]byte(payload))
-	return hex.EncodeToString(h.Sum(nil))
+	h.Write([]byte(method + "\n"))
+	h.Write([]byte(path + "\n"))
+	h.Write([]byte(timestamp + "\n"))
+	h.Write(body)
+	res := hex.EncodeToString(h.Sum(nil))
+	// fmt.Printf("DEBUG [SignRaw]: method=%s path=%s ts=%s bodyLen=%d sig=%s\n", method, path, timestamp, len(body), res)
+	return res
 }
 
 // VerifyInternalSignature validates an internal service call signature.
-// It checks if the timestamp is within the allowed window (±60s) and if the HMAC matches.
-func VerifyInternalSignature(secret, body, signature string, timestampStr string) error {
+func VerifyInternalSignature(signature, method, path, timestampStr string, body []byte, secret string) bool {
 	// 1. Parse and validate timestamp
 	ts, err := strconv.ParseInt(timestampStr, 10, 64)
 	if err != nil {
-		return fmt.Errorf("invalid timestamp format")
+		return false
 	}
 
 	now := time.Now().Unix()
-	if ts < now-60 || ts > now+60 {
-		return fmt.Errorf("request timestamp expired or in the future (replay protection)")
+	if ts < now-300 || ts > now+300 { // 5 minute window for clock skew
+		return false
 	}
 
 	// 2. Re-generate signature and compare
-	expected := GenerateInternalSignature(secret, body, ts)
-	if !hmac.Equal([]byte(signature), []byte(expected)) {
-		return fmt.Errorf("invalid internal signature")
-	}
-
-	return nil
+	expected := SignRaw(method, path, timestampStr, body, secret)
+	return hmac.Equal([]byte(signature), []byte(expected))
 }
