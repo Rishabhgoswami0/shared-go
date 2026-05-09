@@ -246,14 +246,17 @@ func (p *TenantDBPool) lookupTenant(ctx context.Context, tenantID, serviceCode s
 	const q = `
 		SELECT 
 			t.id, 
-			c.write_db_host, c.write_db_port, c.write_db_name, c.write_db_user, c.write_db_password_hash,
-			c.read_db_host, c.read_db_port, c.read_db_name, c.read_db_user, c.read_db_password_hash,
+			w.host, w.port, w.db_name, w.username, w.password_encrypted,
+			COALESCE(r.host, w.host), COALESCE(r.port, w.port), COALESCE(r.db_name, w.db_name), COALESCE(r.username, w.username), COALESCE(r.password_encrypted, w.password_encrypted),
 			t.status
 		FROM tenants t
 		JOIN services s ON s.service_key = $2
 		JOIN tenant_services ts ON ts.tenant_id = t.id AND ts.service_id = s.id
-		JOIN tenant_service_db_config c ON c.tenant_service_id = ts.id
-		WHERE t.id = $1 AND UPPER(c.environment) = UPPER($3)
+		JOIN tenant_service_databases d ON d.tenant_service_id = ts.id AND UPPER(d.environment) = UPPER($3)
+		JOIN tenant_database_endpoints w ON w.tenant_service_database_id = d.id AND w.endpoint_role = 'WRITE' AND w.is_primary = TRUE AND w.deleted_at IS NULL
+		LEFT JOIN tenant_database_endpoints r ON r.tenant_service_database_id = d.id AND r.endpoint_role = 'READ' AND r.status = 'ACTIVE' AND r.deleted_at IS NULL
+		WHERE t.id = $1
+		ORDER BY r.priority DESC NULLS LAST
 		LIMIT 1
 	`
 	env := p.cfg.Environment
