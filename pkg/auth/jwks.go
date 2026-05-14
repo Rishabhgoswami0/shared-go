@@ -20,11 +20,12 @@ import (
 
 // JWKSOptions allows for fine-tuning the JWKS client behavior.
 type JWKSOptions struct {
-	AllowHTTP bool
-	Timeout   time.Duration
-	Retries   int
-	Backoff   time.Duration
-	FailOpen  bool // If true, allows startup even if initial fetch fails
+	AllowHTTP      bool
+	Timeout        time.Duration
+	Retries        int
+	Backoff        time.Duration
+	FailOpen       bool   // If true, allows startup even if initial fetch fails
+	LocalCachePath string // Path to persist JWKS keys for bootstrap resilience
 }
 
 // JWKS represents the JSON Web Key Set structure
@@ -52,18 +53,21 @@ type JWKSClient struct {
 
 	mu        sync.RWMutex
 	keys      map[string]*rsa.PublicKey
+	rawKeys   []JWK // Store raw keys for persistence
 	fetchedAt time.Time
 
 	refreshing atomic.Bool
+	isHealthy  atomic.Bool
 }
 
 // NewJWKSClient initializes a new JWKS client with default options and env-var fallback.
 func NewJWKSClient(jwksURLRaw, expectedIss string, ttl time.Duration) (*JWKSClient, error) {
 	opts := JWKSOptions{
-		AllowHTTP: os.Getenv("JWKS_ALLOW_HTTP") == "true",
-		Timeout:   2 * time.Second,
-		Retries:   3,
-		Backoff:   500 * time.Millisecond,
+		AllowHTTP:      os.Getenv("JWKS_ALLOW_HTTP") == "true",
+		Timeout:        2 * time.Second,
+		Retries:        3,
+		Backoff:        500 * time.Millisecond,
+		LocalCachePath: os.Getenv("JWKS_CACHE_PATH"),
 	}
 	return NewJWKSClientWithOptions(jwksURLRaw, expectedIss, ttl, opts)
 }
@@ -104,8 +108,17 @@ func NewJWKSClientWithOptions(jwksURLRaw, expectedIss string, ttl time.Duration,
 	}
 
 	// Attempt initial fetch (sync)
-	if err := c.refresh(); err != nil && !opts.FailOpen {
-		return nil, fmt.Errorf("initial JWKS fetch failed: %w", err)
+	if err := c.refresh(); err != nil {
+		logger.Warn("Initial JWKS network fetch failed, attempting cache recovery", zap.Error(err))
+		
+		// Fallback to local cache if available
+		if cacheErr := c.loadFromCache(); cacheErr == nil {
+			logger.Info("JWKS recovered from local cache", zap.String("path", opts.LocalCachePath))
+		} else if !opts.FailOpen {
+			return nil, fmt.Errorf("initial JWKS fetch and cache recovery failed: %w (cache err: %v)", err, cacheErr)
+		} else {
+			logger.Warn("JWKS startup entering UNAVAILABLE mode (no network, no cache)")
+		}
 	}
 
 	return c, nil
@@ -161,13 +174,90 @@ func (c *JWKSClient) refresh() error {
 
 		c.mu.Lock()
 		c.keys = parsedKeys
+		c.rawKeys = jwks.Keys
 		c.fetchedAt = time.Now()
 		c.mu.Unlock()
+
+		c.isHealthy.Store(true)
+
+		// 🛡️ Persistence
+		if err := c.saveToCache(); err != nil {
+			logger.Warn("Failed to save JWKS to local cache", zap.Error(err))
+		}
 
 		return nil
 	}
 
+	c.isHealthy.Store(false)
 	return lastErr
+}
+
+func (c *JWKSClient) saveToCache() error {
+	if c.opts.LocalCachePath == "" {
+		return nil
+	}
+
+	c.mu.RLock()
+	data := struct {
+		Version   string    `json:"version"`
+		UpdatedAt time.Time `json:"updated_at"`
+		Keys      []JWK     `json:"keys"`
+	}{
+		Version:   "1.0",
+		UpdatedAt: c.fetchedAt,
+		Keys:      c.rawKeys,
+	}
+	c.mu.RUnlock()
+
+	f, err := os.Create(c.opts.LocalCachePath)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	return json.NewEncoder(f).Encode(data)
+}
+
+func (c *JWKSClient) loadFromCache() error {
+	if c.opts.LocalCachePath == "" {
+		return fmt.Errorf("local cache path not configured")
+	}
+
+	f, err := os.Open(c.opts.LocalCachePath)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	var data struct {
+		Keys []JWK `json:"keys"`
+	}
+	if err := json.NewDecoder(f).Decode(&data); err != nil {
+		return err
+	}
+
+	parsedKeys := make(map[string]*rsa.PublicKey)
+	for _, key := range data.Keys {
+		if key.Kty == "RSA" && key.Use == "sig" && key.Alg == "RS256" {
+			pubKey, err := c.parseRSA(key)
+			if err != nil {
+				continue
+			}
+			parsedKeys[key.Kid] = pubKey
+		}
+	}
+
+	if len(parsedKeys) == 0 {
+		return fmt.Errorf("no valid keys in cache")
+	}
+
+	c.mu.Lock()
+	c.keys = parsedKeys
+	c.rawKeys = data.Keys
+	c.fetchedAt = time.Now() // Use current time for TTL check fallback
+	c.mu.Unlock()
+
+	return nil
 }
 
 // parseRSA converts a JWK to an rsa.PublicKey
@@ -243,4 +333,16 @@ func (c *JWKSClient) KeyFunc(token *jwt.Token) (interface{}, error) {
 	}
 
 	return c.GetKey(kid)
+}
+
+// IsHealthy returns true if the last fetch (network or cache) was successful.
+func (c *JWKSClient) IsHealthy() bool {
+	return c.isHealthy.Load()
+}
+
+// HasKeys returns true if the client has any keys loaded (live or cached).
+func (c *JWKSClient) HasKeys() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return len(c.keys) > 0
 }
