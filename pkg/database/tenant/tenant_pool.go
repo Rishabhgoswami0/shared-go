@@ -23,6 +23,9 @@ var (
 	// ErrTenantInactive is returned when the tenant exists but is not in "active" status.
 	ErrTenantInactive = errors.New("tenant is inactive")
 
+	// ErrTenantSuspended is returned when the tenant is in "suspended" status.
+	ErrTenantSuspended = errors.New("tenant is suspended")
+
 	// ErrConfigurationMissing is returned when no DSN configuration exists for the requested service.
 	ErrConfigurationMissing = errors.New("tenant database configuration missing for this service")
 )
@@ -289,7 +292,14 @@ func (p *TenantDBPool) lookupTenant(ctx context.Context, tenantID, serviceCode s
 		return nil, fmt.Errorf("master-db lookup for tenant %q: %w", tenantID, err)
 	}
 
-	if strings.ToUpper(rec.Status) != "ACTIVE" {
+	status := strings.ToUpper(rec.Status)
+	if status == "INACTIVE" {
+		return nil, fmt.Errorf("%w: tenant_id=%s", ErrTenantInactive, tenantID)
+	}
+	if status == "SUSPENDED" {
+		return nil, fmt.Errorf("%w: tenant_id=%s", ErrTenantSuspended, tenantID)
+	}
+	if status != "ACTIVE" {
 		return nil, fmt.Errorf("%w: tenant_id=%s status=%s", ErrTenantInactive, tenantID, rec.Status)
 	}
 	log.Println("STEP 3D: Tenant found and active:", tenantID)
