@@ -18,7 +18,9 @@ const (
 
 // CustomClaims represents standard and custom claims for the application
 type CustomClaims struct {
-	TenantID  string    `json:"tenant_id,omitempty"`
+	Issuer    string           `json:"iss,omitempty"`
+	Audience  jwt.ClaimStrings `json:"aud,omitempty"`
+	TenantID  string           `json:"tenant_id,omitempty"`
 	Roles     map[string][]string `json:"roles,omitempty"`
 	Type      TokenType `json:"type,omitempty"`
 	Scope     string    `json:"scope,omitempty"`
