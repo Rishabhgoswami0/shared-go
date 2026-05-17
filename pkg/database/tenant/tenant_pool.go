@@ -152,10 +152,10 @@ func NewTenantDBPool(masterRead *sql.DB, cfg PoolConfig, encryptionKey string) *
 //   - Returns ErrTenantNotFound if no row exists in master-db.
 //   - Returns ErrTenantInactive if the tenant is suspended/deleted.
 func (p *TenantDBPool) Get(ctx context.Context, tenantID, serviceCode string) (*TenantConnPair, error) {
-	log.Printf("[TenantDBPool] GET called for tenant: %s service: %s", tenantID, serviceCode)
+	poolKey := tenantID + ":" + serviceCode
 	// ── Fast path: already cached connection ──────────────────────────────
 	p.mu.RLock()
-	if pair, ok := p.pools[tenantID]; ok {
+	if pair, ok := p.pools[poolKey]; ok {
 		pair.lastUsed = time.Now()
 		p.mu.RUnlock()
 		return pair, nil
@@ -175,7 +175,6 @@ func (p *TenantDBPool) Get(ctx context.Context, tenantID, serviceCode string) (*
 		record = entry.record
 	} else {
 		// ── Slow path: load from master-db ─────────────────────────────────────
-		log.Printf("[TenantDBPool] Lookup cache MISS for %s", cacheKey)
 		record, err = p.lookupTenant(ctx, tenantID, serviceCode)
 		if err != nil {
 			return nil, err
@@ -198,31 +197,31 @@ func (p *TenantDBPool) Get(ctx context.Context, tenantID, serviceCode string) (*
 	// ── Write into cache ───────────────────────────────────────────────────
 	p.mu.Lock()
 	// Double-check: another goroutine may have populated while we were connecting.
-	if existing, ok := p.pools[tenantID]; ok {
+	if existing, ok := p.pools[poolKey]; ok {
 		// Close the duplicate we just opened and return the winner.
 		pair.Write.Close()
 		pair.Read.Close()
 		p.mu.Unlock()
 		return existing, nil
 	}
-	p.pools[tenantID] = pair
-	log.Println("STEP 3H: Tenant cached:", tenantID)
+	p.pools[poolKey] = pair
 	p.mu.Unlock()
 
-	log.Printf("[TenantDBPool] loaded tenant %q", tenantID)
 	return pair, nil
 }
 
-// Remove evicts a specific tenant from the cache and closes its connections.
-// Use this if you know a tenant's DSN has changed (e.g. after credential rotation).
+// Remove evicts a specific tenant's pools from the cache and closes their connections.
+// It supports wildcard matching to clear all service pools for the given tenantID.
 func (p *TenantDBPool) Remove(tenantID string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if pair, ok := p.pools[tenantID]; ok {
-		pair.Write.Close()
-		pair.Read.Close()
-		delete(p.pools, tenantID)
-		log.Printf("[TenantDBPool] evicted tenant %q", tenantID)
+	prefix := tenantID + ":"
+	for key, pair := range p.pools {
+		if strings.HasPrefix(key, prefix) {
+			pair.Write.Close()
+			pair.Read.Close()
+			delete(p.pools, key)
+		}
 	}
 }
 
@@ -302,7 +301,6 @@ func (p *TenantDBPool) lookupTenant(ctx context.Context, tenantID, serviceCode s
 	if status != "ACTIVE" {
 		return nil, fmt.Errorf("%w: tenant_id=%s status=%s", ErrTenantInactive, tenantID, rec.Status)
 	}
-	log.Println("STEP 3D: Tenant found and active:", tenantID)
 	// ── Decrypt Passwords (AES-256-GCM) ────────────────────────────────────
 	// Passwords are stored encrypted in master-db. Decrypt them now, in memory only.
 	decWritePass, err := crypto.DecryptDSN(rec.WriteDB.Password, p.encryptionKey)
@@ -316,13 +314,18 @@ func (p *TenantDBPool) lookupTenant(ctx context.Context, tenantID, serviceCode s
 
 	rec.WriteDB.Password = decWritePass
 	rec.ReadDB.Password = decReadPass
-	log.Println("STEP 3E: Password decrypted successfully for tenant:", tenantID)
-	// Re-construct the full DSN strings dynamically for database/sql usage
-	rec.WriteDSN = fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=disable",
-		rec.WriteDB.User, rec.WriteDB.Password, rec.WriteDB.Host, rec.WriteDB.Port, rec.WriteDB.Name)
 
-	rec.ReadDSN = fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=disable",
-		rec.ReadDB.User, rec.ReadDB.Password, rec.ReadDB.Host, rec.ReadDB.Port, rec.ReadDB.Name)
+	// Re-construct the full DSN strings dynamically for database/sql usage with environment-aware TLS settings
+	sslmode := "disable"
+	if strings.ToUpper(env) == "PROD" {
+		sslmode = "require"
+	}
+
+	rec.WriteDSN = fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=%s",
+		rec.WriteDB.User, rec.WriteDB.Password, rec.WriteDB.Host, rec.WriteDB.Port, rec.WriteDB.Name, sslmode)
+
+	rec.ReadDSN = fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=%s",
+		rec.ReadDB.User, rec.ReadDB.Password, rec.ReadDB.Host, rec.ReadDB.Port, rec.ReadDB.Name, sslmode)
 
 	return &rec, nil
 }
@@ -331,9 +334,6 @@ func (p *TenantDBPool) lookupTenant(ctx context.Context, tenantID, serviceCode s
 // When EnableReadReplica is false, the Read handle re-uses the Write pool to avoid
 // needing a read replica in development or single-node environments.
 func (p *TenantDBPool) openTenantConnections(rec *TenantRecord) (*TenantConnPair, error) {
-	log.Println("STEP 3F: Opening DB connections")
-	log.Println("WRITE DB:", rec.WriteDB.Host, rec.WriteDB.Port)
-
 	writeDB, err := postgres.ConnectPostgres(rec.WriteDSN)
 	if err != nil {
 		return nil, fmt.Errorf("write connection: %w", err)
@@ -345,7 +345,6 @@ func (p *TenantDBPool) openTenantConnections(rec *TenantRecord) (*TenantConnPair
 	var readDB *sql.DB
 	if p.cfg.EnableReadReplica {
 		// [PRODUCTION]: Opens a separate connection to the read replica.
-		log.Println("READ DB (replica):", rec.ReadDB.Host, rec.ReadDB.Port)
 		readDB, err = postgres.ConnectPostgres(rec.ReadDSN)
 		if err != nil {
 			writeDB.Close()
@@ -356,11 +355,9 @@ func (p *TenantDBPool) openTenantConnections(rec *TenantRecord) (*TenantConnPair
 		readDB.SetConnMaxLifetime(p.cfg.ConnMaxLifetime)
 	} else {
 		// Dev default: Read re-uses the Write pool. No replica needed.
-		log.Println("READ DB: using Write pool (EnableReadReplica=false)")
 		readDB = writeDB
 	}
 
-	log.Println("STEP 3G: DB connections established successfully")
 	return &TenantConnPair{
 		Write:    writeDB,
 		Read:     readDB,

@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	sharedctx "github.com/Rishabhgoswami0/shared-go/pkg/context"
 	"github.com/sony/gobreaker"
 )
 
@@ -87,6 +88,12 @@ func (r *CatalogResolver) Resolve(ctx context.Context, serviceKey string) ([]End
 
 		// Inject observability headers
 		req.Header.Set("X-Internal-Service", "shared-go-resolver")
+		if requestID := sharedctx.GetRequestID(ctx); requestID != "" {
+			req.Header.Set("X-Request-ID", requestID)
+		}
+		if traceID := sharedctx.GetTraceID(ctx); traceID != "" {
+			req.Header.Set("traceparent", fmt.Sprintf("00-%s-00f067aa0ba902b7-01", traceID))
+		}
 
 		resp, err := r.client.Do(req)
 		if err != nil {
