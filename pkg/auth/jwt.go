@@ -18,13 +18,14 @@ const (
 
 // CustomClaims represents standard and custom claims for the application
 type CustomClaims struct {
-	Issuer    string           `json:"iss,omitempty"`
-	Audience  jwt.ClaimStrings `json:"aud,omitempty"`
-	TenantID  string           `json:"tenant_id,omitempty"`
-	Roles     map[string][]string `json:"roles,omitempty"`
-	Type      TokenType `json:"type,omitempty"`
-	Scope     string    `json:"scope,omitempty"`
-	SessionID string    `json:"session_id,omitempty"` // For backwards compatibility
+	Issuer      string              `json:"iss,omitempty"`
+	Audience    jwt.ClaimStrings    `json:"aud,omitempty"`
+	TenantID    string              `json:"tenant_id,omitempty"`
+	Roles       map[string][]string `json:"roles,omitempty"`
+	Permissions map[string][]string `json:"permissions,omitempty"`
+	Type        TokenType           `json:"type,omitempty"`
+	Scope       string              `json:"scope,omitempty"`
+	SessionID   string              `json:"session_id,omitempty"` // For backwards compatibility
 	jwt.RegisteredClaims
 }
 

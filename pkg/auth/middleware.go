@@ -57,12 +57,13 @@ func AuthMiddleware(jwksClient *JWKSClient, expectedIss string, expectedAud stri
 
 			// Build and inject AuthContext
 			authCtx := AuthContext{
-				Subject:  claims.Subject,
-				TenantID: claims.TenantID,
-				Roles:    claims.Roles,
-				JTI:      claims.ID,
-				Type:     claims.Type,
-				Scope:    claims.Scope,
+				Subject:     claims.Subject,
+				TenantID:    claims.TenantID,
+				Roles:       claims.Roles,
+				Permissions: claims.Permissions,
+				JTI:         claims.ID,
+				Type:        claims.Type,
+				Scope:       claims.Scope,
 			}
 			
 			// For backward compatibility (so older things don't break instantly)

@@ -19,13 +19,43 @@ const (
 
 // AuthContext represents the authenticated identity
 type AuthContext struct {
-	Subject  string
-	Name     string
-	TenantID string
-	Roles    map[string][]string
-	JTI      string
-	Type     TokenType
-	Scope    string
+	Subject     string
+	Name        string
+	TenantID    string
+	Roles       map[string][]string
+	Permissions map[string][]string // Key: Service (uppercase), Value: List of actions stripped of service prefix (e.g. "faculty.read")
+	JTI         string
+	Type        TokenType
+	Scope       string
+}
+
+// HasPermission checks if the authenticated context possesses a specific namespaced permission for a service.
+// Tenant Admin bypass is explicitly removed to enforce least privilege.
+func (ctx AuthContext) HasPermission(service, permissionKey string) bool {
+	if ctx.IsSuperAdmin() {
+		return true // Platform Super Admin retains inherent system bypass
+	}
+	if ctx.Permissions == nil {
+		return false
+	}
+
+	normService := strings.ToUpper(service)
+	normPerm := strings.ToLower(permissionKey)
+
+	// Dynamically strip the service prefix from the permission key to check the claims (e.g. "registration.faculty.read" -> "faculty.read")
+	prefix := strings.ToLower(service) + "."
+	strippedPerm := strings.TrimPrefix(normPerm, prefix)
+
+	perms, ok := ctx.Permissions[normService]
+	if !ok {
+		return false
+	}
+	for _, p := range perms {
+		if strings.ToLower(p) == strippedPerm {
+			return true
+		}
+	}
+	return false
 }
 
 type contextKey string
