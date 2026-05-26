@@ -204,6 +204,21 @@ func (p *Provisioner) Provision(ctx context.Context, req ProvisionRequest) (*Pro
 	grantCtx, grantCancel := context.WithTimeout(ctx, 5*time.Second)
 	defer grantCancel()
 
+	// ── Grant Schema-Level Access (PostgreSQL 15+ requires explicit USAGE + CREATE) ─
+	// In PG15+, CREATE on the public schema is no longer granted to PUBLIC by default.
+	// Without USAGE + CREATE, the write user cannot run DDL (e.g. CREATE TABLE) inside
+	// the public schema — which would break the verifier and future migration runs.
+	_, err = tenantDB.ExecContext(grantCtx, `GRANT USAGE, CREATE ON SCHEMA public TO "`+writeUser+`"`)
+	if err != nil {
+		provErr = errors.New("provision: failed to grant schema access to write user: " + err.Error())
+		return nil, provErr
+	}
+	_, err = tenantDB.ExecContext(grantCtx, `GRANT USAGE ON SCHEMA public TO "`+readUser+`"`)
+	if err != nil {
+		provErr = errors.New("provision: failed to grant schema access to read user: " + err.Error())
+		return nil, provErr
+	}
+
 	// Grant to Write User
 	_, err = tenantDB.ExecContext(grantCtx, `GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO "`+writeUser+`"`)
 	if err != nil {
