@@ -6,12 +6,13 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"io"
-	"log"
 	"net/http"
 	"time"
 
 	"github.com/Rishabhgoswami0/shared-go/pkg/auth"
 	apperrors "github.com/Rishabhgoswami0/shared-go/pkg/errors"
+	"github.com/Rishabhgoswami0/shared-go/pkg/logger"
+	"go.uber.org/zap"
 )
 
 // IdempotencyStatus represents the processing state of an idempotent request.
@@ -108,7 +109,10 @@ func IdempotencyMiddleware(store IdempotencyStore) func(http.Handler) http.Handl
 				// Stale Check (Phase 2): If stuck IN_PROGRESS > 60s, allow retry.
 				if record.Status == StatusInProgress && time.Since(record.CreatedAt) > 60*time.Second {
 					// Fallthrough and allow CreateRecord (which should overwrite/replace in a robust store, or we can handle it here)
-					log.Printf("[Idempotency] Stale record found for key %s (created %v), allowing recovery", idempotencyKey, record.CreatedAt)
+					logger.Log.Warn("idempotency_stale_record",
+						zap.String("key", idempotencyKey),
+						zap.Time("created_at", record.CreatedAt),
+					)
 				} else {
 					// Status is IN_PROGRESS and NOT stale, or FAILED and we don't support retry yet
 					apperrors.WriteError(w, r, apperrors.NewBadRequest(apperrors.CodeValidationFailed, "Request is already being processed", nil))

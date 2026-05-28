@@ -4,7 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"log"
+
+	"github.com/Rishabhgoswami0/shared-go/pkg/logger"
+	"go.uber.org/zap"
 )
 
 // contextKeyTx is the context key for an active *sql.Tx.
@@ -72,7 +74,7 @@ func RunInTx(ctx context.Context, fn func(ctx context.Context) error) error {
 		return fmt.Errorf("RunInTx: %w", err)
 	}
 
-	log.Println("[DB_TX] Starting transaction...")
+	logger.Log.Info("db_tx_starting")
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("RunInTx: begin transaction: %w", err)
@@ -83,7 +85,7 @@ func RunInTx(ctx context.Context, fn func(ctx context.Context) error) error {
 
 	// Run the caller's work inside the transaction.
 	if err := fn(txCtx); err != nil {
-		log.Printf("[DB_TX] Error occurred, rolling back: %v", err)
+		logger.Log.Error("db_tx_rollback", zap.Error(err))
 		// Best-effort rollback — log if it also fails but return original error.
 		if rbErr := tx.Rollback(); rbErr != nil {
 			return fmt.Errorf("RunInTx: fn error: %w; rollback error: %v", err, rbErr)
@@ -93,10 +95,10 @@ func RunInTx(ctx context.Context, fn func(ctx context.Context) error) error {
 
 	// All operations succeeded — commit.
 	if err := tx.Commit(); err != nil {
-		log.Printf("[DB_TX] Failed to commit transaction: %v", err)
+		logger.Log.Error("db_tx_commit_failed", zap.Error(err))
 		return fmt.Errorf("RunInTx: commit: %w", err)
 	}
 
-	log.Println("[DB_TX] Transaction committed successfully.")
+	logger.Log.Info("db_tx_committed")
 	return nil
 }
